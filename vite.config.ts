@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: '/jailbreak/',
+  base: '/suppression/',
 
   server: {
     host: '0.0.0.0',
