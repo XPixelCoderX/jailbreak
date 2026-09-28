@@ -151,6 +151,7 @@ export class Game {
     this.partner.add(body, head);
     this.partner.visible = false;
     this.scene.add(this.partner);
+    this.multiplayer.onSignal = (code) => this.ui.setDirectCode(code);
     this.multiplayer.onStatus = (text) => {
       this.ui.setMultiplayerStatus(text);
       this.ui.setInviteCode(this.multiplayer.code);
@@ -463,6 +464,9 @@ export class Game {
   }
 
   private bindUI(): void {
+    this.ui.onDirectHost = () => { this.ui.setDirectCode(''); void this.multiplayer.hostDirect(); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
+    this.ui.onDirectJoin = (offer) => { this.ui.setDirectCode(''); void this.multiplayer.joinDirect(offer); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
+    this.ui.onDirectAnswer = (answer) => { void this.multiplayer.acceptAnswer(answer); };
     this.ui.onHost = () => { this.multiplayer.connect('host'); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
     this.ui.onJoin = (code) => { this.multiplayer.connect('join', code); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
     this.ui.onLeave = () => { this.multiplayer.disconnect(); this.ui.setMultiplayerStatus('Not connected'); this.ui.setInviteCode(''); };

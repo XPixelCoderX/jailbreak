@@ -704,3 +704,12 @@ h3 {
 .gun-status { position: absolute; bottom: 13%; left: 50%; transform: translateX(-50%); text-align: center; padding: .55rem 1rem; border: 1px solid var(--border); background: #081a1dcc; color: #bde4e4; font-size: .75rem; letter-spacing: .12em; white-space: nowrap; }
 .invite-row { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #a9d0d0; font-size: .72rem; letter-spacing: .15em; }
 .invite-row strong { display: block; font-size: 1.5rem; letter-spacing: .3em; color: #f1ffff; margin-top: .3rem; }
+.connection-tabs { display: flex; gap: .5rem; }
+.connection-tabs button { flex: 1; }
+.connection-tabs button.selected { border-color: #b0e5e5; background: rgba(111,206,211,.3); }
+#multiplayer-panel .panel { overflow-y: auto; }
+#relay-controls, #direct-controls { display: flex; flex-direction: column; gap: .75rem; }
+#direct-controls label { font-size: .72rem; letter-spacing: .13em; color: #add0d1; }
+#direct-controls textarea { width: 100%; resize: vertical; min-height: 4rem; background: #061418; border: 1px solid var(--border); color: #d9f6f6; padding: .7rem; font-size: .72rem; overflow-wrap: anywhere; }
+.direct-actions { display: flex; gap: .5rem; }
+.direct-actions button { flex: 1; font-size: .75rem; }

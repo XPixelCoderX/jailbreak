@@ -12,6 +12,9 @@ interface TerminalRuntime {
 }
 
 export class UIManager {
+  public onDirectHost: (() => void) | null = null;
+  public onDirectJoin: ((offer: string) => void) | null = null;
+  public onDirectAnswer: ((answer: string) => void) | null = null;
   public onHost: (() => void) | null = null;
   public onJoin: ((code: string) => void) | null = null;
   public onLeave: (() => void) | null = null;
@@ -503,6 +506,10 @@ export class UIManager {
     this.root.querySelector<HTMLElement>('#gun-status')!.textContent = text;
   }
 
+  public setDirectCode(code: string): void {
+    this.root.querySelector<HTMLTextAreaElement>('#direct-output')!.value = code;
+  }
+
   public setInviteCode(code: string): void {
     this.root.querySelector<HTMLElement>('#invite-code')!.textContent = code || '------';
   }
@@ -542,6 +549,23 @@ export class UIManager {
       if (code === '------') return;
       try { await navigator.clipboard.writeText(code); this.setMultiplayerStatus(`Copied invite code ${code}`); }
       catch { this.setMultiplayerStatus(`Copy code manually: ${code}`); }
+    });
+    const relayControls = this.root.querySelector('#relay-controls')!;
+    const directControls = this.root.querySelector('#direct-controls')!;
+    for (const [tab, direct] of [['relay-tab', false], ['direct-tab', true]] as const) {
+      this.root.querySelector(`#${tab}`)!.addEventListener('click', () => {
+        relayControls.classList.toggle('hidden', direct);
+        directControls.classList.toggle('hidden', !direct);
+        this.root.querySelector('#relay-tab')!.classList.toggle('selected', !direct);
+        this.root.querySelector('#direct-tab')!.classList.toggle('selected', direct);
+      });
+    }
+    this.root.querySelector('#direct-host')!.addEventListener('click', () => this.onDirectHost?.());
+    this.root.querySelector('#direct-join')!.addEventListener('click', () => this.onDirectJoin?.(this.root.querySelector<HTMLTextAreaElement>('#direct-input')!.value));
+    this.root.querySelector('#direct-answer')!.addEventListener('click', () => this.onDirectAnswer?.(this.root.querySelector<HTMLTextAreaElement>('#direct-input')!.value));
+    this.root.querySelector('#direct-copy')!.addEventListener('click', async () => {
+      const text = this.root.querySelector<HTMLTextAreaElement>('#direct-output')!.value;
+      if (text) { try { await navigator.clipboard.writeText(text); this.setMultiplayerStatus('Connection code copied.'); } catch { this.setMultiplayerStatus('Select and copy the code manually.'); } }
     });
     this.root.querySelector('#leave-button')!.addEventListener('click', () => this.onLeave?.());
     this.root.querySelector<HTMLFormElement>('#chat-form')!.addEventListener('submit', (event) => {
@@ -816,13 +840,27 @@ export class UIManager {
           <div class="panel narrow">
             <p class="eyebrow">COOPERATIVE CONNECTION / 02 PLAYERS</p>
             <h2>Multiplayer</h2>
-            <p class="menu-help">Host a room and share its code, or enter a friend's code to join. Each player explores their own session; positions, chat and shots are shared. Find a pistol near the starting area.</p>
+            <p class="menu-help">Choose a short-code room server or exchange two long codes to connect directly. Each player explores their own session; positions, chat and shots are shared. Find a pistol near the starting area.</p>
             <div id="multiplayer-status" class="connection-status">Not connected</div>
             <div class="invite-row"><span>INVITE CODE <strong id="invite-code">------</strong></span><button id="copy-code-button" type="button">COPY</button></div>
+            <div class="connection-tabs"><button type="button" id="relay-tab" class="selected">ROOM SERVER</button><button type="button" id="direct-tab">DIRECT P2P</button></div>
+            <div id="relay-controls">
             <label class="menu-help" for="relay-url">Relay URL (optional in local development; required on GitHub Pages)</label>
             <input id="relay-url" type="url" placeholder="wss://your-relay.example/ws" autocomplete="url">
             <button id="host-button">HOST A ROOM</button>
             <form id="join-form" class="join-form"><input id="room-code" maxlength="6" placeholder="ROOM CODE" aria-label="Room code" autocomplete="off" required><button type="submit">JOIN ROOM</button></form>
+            </div>
+            <div id="direct-controls" class="hidden">
+              <p class="menu-help">No room server needed. Host generates an offer and sends it to a friend. The friend pastes it and generates an answer; the host pastes that answer to connect. Copy the <strong>entire</strong> long code each time.</p>
+              <button type="button" id="direct-host">1 · CREATE HOST OFFER</button>
+              <label for="direct-output">YOUR CODE · SEND TO THE OTHER PLAYER</label>
+              <textarea id="direct-output" readonly rows="3" aria-label="Your direct connection code"></textarea>
+              <button type="button" id="direct-copy">COPY MY CODE</button>
+              <label for="direct-input">CODE RECEIVED FROM THE OTHER PLAYER</label>
+              <textarea id="direct-input" rows="3" placeholder="Paste the entire offer or answer here" aria-label="Received direct connection code"></textarea>
+              <div class="direct-actions"><button type="button" id="direct-join">2 · JOIN WITH OFFER</button><button type="button" id="direct-answer">3 · HOST ACCEPT ANSWER</button></div>
+              <p class="menu-help">Direct connections use public STUN for address discovery, not to carry game data. Some restrictive networks cannot connect without a TURN relay; use Room Server instead.</p>
+            </div>
             <div class="panel-buttons horizontal"><button id="leave-button">DISCONNECT</button><button id="multiplayer-close">BACK</button></div>
           </div>
         </section>
