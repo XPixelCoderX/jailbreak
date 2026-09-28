@@ -55,6 +55,8 @@ export class Player {
   public pitch = 0;
   public health = MAX_HEALTH;
   public stamina = MAX_STAMINA;
+  private sprinting = false;
+  private fovKick = 0;
   public flashlightBattery = 46;
   public flashlightOn = false;
   public fear = 0;
@@ -182,6 +184,7 @@ export class Player {
 
     this.crouched = input.isActionDown('crouch', settings);
     const wantsSprint = input.isActionDown('sprint', settings) && !this.crouched && wantsMove;
+    this.sprinting = wantsSprint && this.stamina > 1;
     const moveVector = new Vector3(strafe, 0, -forward);
 
     if (moveVector.lengthSq() > 0) {
@@ -238,7 +241,8 @@ export class Player {
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = this.yaw;
     this.camera.rotation.x = this.pitch;
-    this.camera.fov = settings.accessibility.fov;
+    this.fovKick = MathUtils.damp(this.fovKick, this.sprinting ? 5.5 : 0, 4.5, dt);
+    this.camera.fov = settings.accessibility.fov + this.fovKick;
     this.camera.far = 90 * settings.graphics.viewDistance;
     this.camera.updateProjectionMatrix();
     this.shakeAmount = MathUtils.damp(this.shakeAmount, 0, 3.5, dt);

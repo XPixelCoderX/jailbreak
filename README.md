@@ -36,6 +36,28 @@ ray-traced effects in WebGL (no hardware RT is required, and none is claimed):
   equipment, instanced debris, steam plumes, water leaks, and drifting dust
 - Cinematic grade: subtle chromatic aberration, film grain, vignette, black
   lift, and screen-warp distortion pulses during supernatural events
+- Adaptive resolution: the internal render scale eases down (and back up)
+  automatically to keep the frame rate steady
+
+## Gameplay systems
+
+- **Rebuilt doors** — full-width slabs, edge posts, hinge swing, and solid
+  colliders that exactly match the doorway: closed doors fully block the gap,
+  open doors swing aside and let you walk straight through
+- **Verified facility layout** — every corridor connection lines up; the
+  Security desk, Maintenance hall, shelter, and Underground are all reachable
+- **Two new monster types** — the zone-locked **Watcher** (Observation Deck —
+  it freezes while you look at it, stalks when you look away) and the
+  **Crawler** (Level 3 storage — fast, but slowed by your flashlight beam)
+- **Level 2: Observation Deck** — keycard-sealed area north of Security with
+  the Chamber 4 footage, a charger, and its own security feed
+- **Level 3: Containment Storage** — reached through the shelter, with a
+  charger, documents, and the Crawler's hunting ground
+- **Extended objective chain** with two new steps (reach Level 2, recover the
+  footage, descend to Level 3); older save files migrate cleanly
+- **Contextual hints** in the top-right HUD (toggleable in Settings) and an
+  optional **XYZ coordinates** readout
+- **Emergency lamp chargers**, sprint FOV kick, and per-run ending stats
 
 ## Requirements
 

@@ -81,6 +81,7 @@ interface FacilityLightData {
   phase: 'on' | 'dropout' | 'restrike';
   phaseTimer: number;
   tube: Mesh | null;
+  shaft?: Mesh;
 }
 
 export class Facility {
@@ -110,13 +111,13 @@ export class Facility {
   private readonly particleLayers: Points[] = [];
   private readonly strangeDoors: Door[] = [];
   private readonly tempRay = new Ray();
-  private readonly tempVec = new Vector3();
   private researchLightLevel = 0.08;
   private emergencyLightLevel = 1;
   private coreLightLevel = 0.1;
 
   // Atmosphere / RTX-style systems
   private readonly lightShafts: { mesh: Mesh; light: PointLight }[] = [];
+  private lightWorldCache: Vector3[] = [];
   private readonly blinkers: { mesh: Mesh; seed: number; color: Color }[] = [];
   private readonly reflectors: Reflector[] = [];
   private steam: {
@@ -182,7 +183,7 @@ export class Facility {
     }
 
     for (const fan of this.fans) {
-      fan.rotation.z += dt * (fan.userData.speed as number);
+      fan.rotation.y += dt * (fan.userData.speed as number);
     }
 
     for (const layer of this.particleLayers) {
@@ -293,13 +294,18 @@ export class Facility {
 
   /** Electrical buzz level for nearby faulty fluorescent fixtures. */
   public getBuzzLevel(): number {
+    if (this.lightWorldCache.length !== this.lights.length) {
+      // Fixtures never move, so their world positions are computed once.
+      this.root.updateWorldMatrix(true, true);
+      this.lightWorldCache = this.lights.map((light) => light.getWorldPosition(new Vector3()));
+    }
     let best = 0;
-    for (const light of this.lights) {
-      const data = light.userData as FacilityLightData;
+    for (let index = 0; index < this.lights.length; index += 1) {
+      const data = this.lights[index].userData as FacilityLightData;
       if (data.emergency || data.behavior === 'stable') {
         continue;
       }
-      const distance = light.getWorldPosition(this.tempVec).distanceTo(this.listener);
+      const distance = this.lightWorldCache[index].distanceTo(this.listener);
       if (distance > 11) {
         continue;
       }
@@ -317,9 +323,11 @@ export class Facility {
     const base
       = zone === 'maintenance' ? 0.85
         : zone === 'core' ? 0.72
-          : zone === 'underground' ? 0.52
-            : zone === 'research' ? 0.32
-              : 0.18;
+          : zone === 'level3' ? 0.66
+            : zone === 'underground' ? 0.52
+              : zone === 'level2' ? 0.3
+                : zone === 'research' ? 0.32
+                  : 0.18;
     return this.blackout > 0 ? base * 0.35 : base;
   }
 
@@ -391,10 +399,10 @@ export class Facility {
         const tubeMaterial = data.tube.material as MeshBasicMaterial;
         tubeMaterial.color.copy(light.color).multiplyScalar(Math.min(2.4, 0.15 + factor * 1.25));
       }
-      const shaft = this.lightShafts.find((entry) => entry.light === light);
+      const shaft = data.shaft;
       if (shaft) {
-        const shaftMaterial = shaft.mesh.material as MeshBasicMaterial;
-        shaftMaterial.opacity = shaft.mesh.userData.baseOpacity as number * Math.min(1, factor);
+        const shaftMaterial = shaft.material as MeshBasicMaterial;
+        shaftMaterial.opacity = shaft.userData.baseOpacity as number * Math.min(1, factor);
       }
     }
   }
@@ -628,7 +636,7 @@ export class Facility {
     if (zone === 'underground') {
       return 'water';
     }
-    if (zone === 'maintenance' || zone === 'core' || zone === 'research') {
+    if (zone === 'maintenance' || zone === 'core' || zone === 'research' || zone === 'level2') {
       return 'metal';
     }
     return 'concrete';
@@ -784,33 +792,30 @@ export class Facility {
     const intake = this.createRoom('intake', 0, 0, 8, 8, { east: [{ center: 0, width: 2.8 }] }, 0x20242b, hallwayTexture);
     this.decorateIntake(intake.group);
 
-    const intakeHall = this.createRoom('intake', 8, 0, 8, 4, { west: [{ center: 0, width: 2.8 }], east: [{ center: 0, width: 3 }] }, 0x1d2127, hallwayTexture);
-    this.decorateHallway(intakeHall.group, 8, 0, 8, 4, 1);
+    const intakeHall = this.createRoom('intake', 7.5, 0, 7, 4, { west: [{ center: 0, width: 2.8 }], east: [{ center: 0, width: 3 }] }, 0x1d2127, hallwayTexture);
+    this.decorateHallway(intakeHall.group, 7.5, 0, 7, 4, 1);
 
     const lobby = this.createRoom('lobby', 20, 0, 18, 16, {
       west: [{ center: 0, width: 3 }],
-      east: [{ center: 0, width: 3 }, { center: 6, width: 3 }],
-      south: [{ center: -5, width: 2.8 }],
-      north: [{ center: 4.5, width: 2.8 }],
+      east: [{ center: -6, width: 2.8 }, { center: 7, width: 2.8 }],
+      north: [{ center: 0, width: 2.8 }],
     }, 0x1f242b, hallwayTexture);
     this.decorateLobby(lobby.group);
 
-    const security = this.createRoom('security', 20, -14, 10, 10, { north: [{ center: 0, width: 2.8 }] }, 0x21262e, hallwayTexture);
+    const security = this.createRoom('security', 20, -13.5, 10, 11, { north: [{ center: 0, width: 2.8 }], south: [{ center: 0, width: 2.8 }] }, 0x21262e, hallwayTexture);
     this.decorateSecurity(security.group);
 
     const maintHall = this.createRoom('maintenance', 34, 7, 10, 6, {
       west: [{ center: 0, width: 2.8 }],
-      north: [{ center: 0, width: 2.8 }],
       south: [{ center: 0, width: 2.8 }],
     }, 0x21242a, hallwayTexture);
     this.decorateHallway(maintHall.group, 34, 7, 10, 6, 2);
-    const maintenance = this.createRoom('maintenance', 34, 18, 16, 16, { south: [{ center: 0, width: 2.8 }] }, 0x242a31, hallwayTexture);
+    const maintenance = this.createRoom('maintenance', 34, 18, 16, 16, { north: [{ center: 0, width: 2.8 }] }, 0x242a31, hallwayTexture);
     this.decorateMaintenance(maintenance.group);
 
     const researchHall = this.createRoom('research', 34, -6, 10, 6, {
       west: [{ center: 0, width: 2.8 }],
       east: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
     }, 0x20252d, hallwayTexture);
     this.decorateHallway(researchHall.group, 34, -6, 10, 6, 3);
     const research = this.createRoom('research', 48, -6, 18, 16, {
@@ -828,20 +833,45 @@ export class Facility {
     const underground = this.createRoom('underground', 74, -6, 24, 12, {
       west: [{ center: 0, width: 2.8 }],
       east: [{ center: 0, width: 2.8 }],
-      north: [{ center: 6, width: 2.8 }],
+      south: [{ center: 0, width: 2.8 }],
     }, 0x1a1b20, hallwayTexture);
     this.decorateUnderground(underground.group);
 
-    const shelter = this.createRoom('underground', 74, 8, 14, 10, { south: [{ center: 0, width: 2.8 }] }, 0x1c2026, hallwayTexture);
+    const shelter = this.createRoom('underground', 74, 8, 14, 10, { north: [{ center: 0, width: 2.8 }], south: [{ center: 0, width: 2.8 }] }, 0x1c2026, hallwayTexture);
     this.decorateShelter(shelter.group);
 
-    const coreHall = this.createRoom('core', 90, -6, 10, 8, {
+    const vestibule = this.createRoom('underground', 74, 1.5, 5, 3, { north: [{ center: 0, width: 2.8 }], south: [{ center: 0, width: 2.8 }] }, 0x1b1e24, hallwayTexture);
+    this.decorateLinkHallway(vestibule.group, 74, 1.5, 5, 3, 7);
+
+    const coreHall = this.createRoom('core', 90.5, -6, 9, 8, {
       west: [{ center: 0, width: 2.8 }],
       east: [{ center: 0, width: 2.8 }],
     }, 0x181d23, hallwayTexture);
-    this.decorateHallway(coreHall.group, 90, -6, 10, 8, 5);
+    this.decorateHallway(coreHall.group, 90.5, -6, 9, 8, 5);
     const core = this.createRoom('core', 104, -6, 18, 16, { west: [{ center: 0, width: 2.8 }] }, 0x141a22, hallwayTexture);
     this.decorateCore(core.group);
+
+    // --- Level 2: Observation Deck (north of Security, keycard sealed) ------
+    const l2Corridor = this.createRoom('level2', 20, -23, 6, 8, {
+      north: [{ center: 0, width: 2.8 }],
+      south: [{ center: 0, width: 2.8 }],
+    }, 0x1d2230, hallwayTexture);
+    this.decorateLinkHallway(l2Corridor.group, 20, -23, 6, 8, 3);
+    const level2 = this.createRoom('level2', 20, -34, 16, 14, {
+      south: [{ center: 0, width: 2.8 }],
+    }, 0x1e2433, hallwayTexture);
+    this.decorateLevel2(level2.group);
+
+    // --- Level 3: Containment Storage (south of the shelter) ---------------
+    const l3Corridor = this.createRoom('level3', 74, 16.5, 6, 7, {
+      north: [{ center: 0, width: 2.8 }],
+      south: [{ center: 0, width: 2.8 }],
+    }, 0x1a1d26, hallwayTexture);
+    this.decorateLinkHallway(l3Corridor.group, 74, 16.5, 6, 7, 5);
+    const level3 = this.createRoom('level3', 74, 27, 18, 14, {
+      north: [{ center: 0, width: 2.8 }],
+    }, 0x171a22, hallwayTexture);
+    this.decorateLevel3(level3.group);
 
     this.createDoors();
     this.createInteractables();
@@ -907,7 +937,7 @@ export class Facility {
       name: this.zoneName(zone),
       ambient: zone,
       bounds,
-      darkness: zone === 'intake' ? 0.88 : zone === 'core' ? 0.78 : zone === 'underground' ? 0.82 : zone === 'research' ? 0.64 : 0.56,
+      darkness: zone === 'intake' ? 0.88 : zone === 'core' ? 0.78 : zone === 'underground' ? 0.82 : zone === 'level3' ? 0.86 : zone === 'research' ? 0.64 : zone === 'level2' ? 0.7 : 0.56,
     });
 
     this.addCeilingLights(group, zone, centerX, centerZ, width, depth);
@@ -994,7 +1024,7 @@ export class Facility {
         tube.position.set(positionX, 3.1, positionZ);
         group.add(tube);
 
-        const intensityBase = zone === 'research' || zone === 'core' ? 0.78 : zone === 'intake' ? 0.3 : 0.6;
+        const intensityBase = zone === 'research' || zone === 'core' ? 0.78 : zone === 'level2' ? 0.72 : zone === 'level3' ? 0.5 : zone === 'intake' ? 0.3 : 0.6;
         const lightColor = zone === 'core' ? 0x9ac5ff : 0xe9efff;
         const light = new PointLight(lightColor, intensityBase, 11.5, 1.85);
         light.position.set(positionX, 2.82, positionZ);
@@ -1037,6 +1067,7 @@ export class Facility {
         shaft.userData.baseOpacity = 0.1;
         shaft.renderOrder = 2;
         group.add(shaft);
+        light.userData.shaft = shaft;
         this.lightShafts.push({ mesh: shaft, light });
 
         group.add(light);
@@ -1083,7 +1114,7 @@ export class Facility {
     this.addBench(group, 24, -4.2, 4.2);
     this.addShelf(group, 27, 6.2, 1.6, 2.4);
     this.addPlantPot(group, 27.5, -6.5);
-    this.addWallMonitor(group, 20.5, 0.6, -7.9, Math.PI, 0x6fd2ff);
+    this.addWallMonitor(group, 24.5, 0.6, -7.9, Math.PI, 0x6fd2ff);
     this.addWallMonitor(group, 17.6, -0.6, -7.9, Math.PI, 0x6fd2ff);
     this.addFan(group, 24, 2.8);
     this.addPropDebris(group, 20, 6.7, 8);
@@ -1092,7 +1123,7 @@ export class Facility {
     this.addSign(group, 26.5, 1.95, -7.84, 0, 'exit');
     this.addSign(group, 12.2, 1.85, 7.84, Math.PI, 'caution');
     this.addElectricalPanel(group, 28.8, 1.4, 2.2, -Math.PI / 2);
-    this.addGrungeDecal(group, 20, 1.3, -7.84, 0, 4.2, 2.6, 3);
+    this.addGrungeDecal(group, 24, 1.3, -7.84, 0, 4.2, 2.6, 3);
     this.addGrungeDecal(group, 11.16, 1.3, 4, Math.PI / 2, 3.2, 2.6, 6);
     this.addCable(group, 12.3, 3.2, -6.5, 17.5, 3.1, -6.5, 0.5);
     this.addCable(group, 22, 3.2, 7.4, 27, 2.6, 7.4, 0.65);
@@ -1104,11 +1135,11 @@ export class Facility {
     this.addDesk(group, 22.2, -12.6, 3.6);
     this.addLocker(group, 16.5, -10.5, 3);
     this.addShelf(group, 23.6, -17.4, 1.5, 2.2);
-    this.addWallMonitor(group, 20, 0.2, -18.88, 0, 0x87d1ff);
+    this.addWallMonitor(group, 23, 0.2, -18.88, 0, 0x87d1ff);
     this.addPipeRun(group, 15.4, -9.2, 7.8, false);
     this.addElectricalPanel(group, 24.84, 1.4, -14, -Math.PI / 2);
     this.addElectricalPanel(group, 15.16, 1.4, -16.5, Math.PI / 2);
-    this.addSign(group, 20, 2.2, -18.84, 0, 'highVoltage');
+    this.addSign(group, 16.5, 2.2, -18.84, 0, 'highVoltage');
     this.addGrungeDecal(group, 15.16, 1.2, -13, Math.PI / 2, 3, 2.2, 5);
     this.addCable(group, 15.4, 3.1, -17.5, 24.5, 3.1, -17.5, 0.55);
   }
@@ -1128,7 +1159,7 @@ export class Facility {
     this.addElectricalPanel(group, 41.76, 1.4, 24.4, -Math.PI / 2);
     this.addSign(group, 34, 2.2, 25.84, Math.PI, 'highVoltage');
     this.addSign(group, 30.5, 1.8, 10.16, 0, 'caution');
-    this.addVent(group, 34, 2.6, 10.16, 0);
+    this.addVent(group, 38.5, 2.6, 10.16, 0);
     this.addVent(group, 41.84, 2.6, 20, -Math.PI / 2);
     this.addGrungeDecal(group, 26.16, 1.3, 18, Math.PI / 2, 4, 2.6, 7);
     this.addGrungeDecal(group, 34, 1.4, 25.84, Math.PI, 3.6, 2.4, 8);
@@ -1185,7 +1216,7 @@ export class Facility {
     this.addDesk(group, 71.5, 9.3, 3.4);
     this.addBed(group, 76.8, 11.5, 1.2);
     this.addBed(group, 80.6, 11.5, 1.2);
-    this.addWallMonitor(group, 74, 8.1, 3.12, Math.PI, 0x7ee0ff);
+    this.addWallMonitor(group, 78, 8.1, 3.12, Math.PI, 0x7ee0ff);
     this.addSign(group, 78, 2.1, 12.84, Math.PI, 'exit');
     this.addElectricalPanel(group, 67.24, 1.4, 12, Math.PI / 2);
     this.addGrungeDecal(group, 76, 1.3, 12.84, Math.PI, 3, 2.2, 14);
@@ -1233,13 +1264,92 @@ export class Facility {
     }
   }
 
+  /** Corridors whose ends hold doorways: decorate side walls only. */
+  private decorateLinkHallway(group: Group, centerX: number, centerZ: number, width: number, depth: number, seed: number): void {
+    this.addGrungeDecal(group, centerX - width / 2 + 0.16, 1.3, centerZ + 0.6, Math.PI / 2, Math.min(2.4, depth - 0.6), 2, 40 + seed);
+    this.addGrungeDecal(group, centerX + width / 2 - 0.16, 1.2, centerZ - 0.6, -Math.PI / 2, Math.min(2.2, depth - 0.8), 2, 50 + seed);
+    this.addSign(group, centerX + width / 2 - 0.16, 1.9, centerZ + 0.4, -Math.PI / 2, seed % 2 === 0 ? 'suppression' : 'caution');
+    this.addCable(
+      group,
+      centerX - width / 2 + 0.4, 3.1, centerZ - depth / 2 + 0.4,
+      centerX + width / 2 - 0.4, 3.1, centerZ + depth / 2 - 0.4,
+      0.45,
+    );
+    this.addPipeRun(group, centerX - width / 2 + 0.35, centerZ, Math.max(2, depth * 0.6), false);
+  }
+
+  private decorateLevel2(group: Group): void {
+    this.addDesk(group, 24.4, -30.4, 3.4);
+    this.addDesk(group, 24.4, -34.6, 3.2);
+    this.addLocker(group, 16.5, -28.7, 2);
+    this.addWallMonitor(group, 16.6, 0.2, -40.88, 0, 0x7fd0ff);
+    this.addWallMonitor(group, 22.4, 0.2, -40.88, 0, 0x7fd0ff);
+    this.addSign(group, 25.4, 2.1, -40.84, 0, 'suppression');
+    this.addVent(group, 14, 2.7, -40.84, 0);
+    this.addGrungeDecal(group, 20, 1.3, -40.84, 0, 5, 2.8, 30);
+    this.addElectricalPanel(group, 28.84, 1.4, -36, -Math.PI / 2);
+    this.addCable(group, 13, 3.15, -30, 27, 3.1, -39, 0.7);
+    this.addFan(group, 24, -33);
+    this.addPropDebris(group, 17.5, -38, 8);
+    this.addBrokenEquipment(group, 14.8, -36.4, 1.4);
+  }
+
+  private decorateLevel3(group: Group): void {
+    this.addLocker(group, 67.5, 22.5, 3);
+    this.addShelf(group, 80.5, 24, 1.6, 2.6);
+    this.addShelf(group, 80.5, 29.5, 1.6, 2.6);
+    this.addContainmentFrame(group, 70, 32);
+    this.addPipeRun(group, 74, 26.7, 16, true);
+    this.addPipeRun(group, 66.8, 27, 11, false);
+    this.addFloodPlane(group, 77, 31.5, 9, 4);
+    this.addVent(group, 68.5, 2.7, 20.16, 0);
+    this.addSign(group, 70, 2.2, 20.16, 0, 'radiation');
+    this.addGrungeDecal(group, 79, 1.4, 20.16, 0, 4.6, 2.8, 31);
+    this.addElectricalPanel(group, 65.16, 1.4, 30, Math.PI / 2);
+    this.addCable(group, 66, 3.15, 22, 82, 3.1, 32.5, 0.7);
+    this.addFan(group, 79, 23.5);
+    this.addPropDebris(group, 77.5, 31, 9);
+    this.addBrokenEquipment(group, 73.5, 24.6, -2.2);
+  }
+
+  /** Wall-mounted emergency charger that tops the flashlight cell back up. */
+  private makeCharger(id: string, x: number, z: number, rotationY: number): SwitchInteractable {
+    const group = new Group();
+    const body = new Mesh(
+      new BoxGeometry(0.55, 0.95, 0.26),
+      new MeshStandardMaterial({ color: 0x3d4650, roughness: 0.5, metalness: 0.75, bumpMap: metalBumpTexture(), bumpScale: 0.01 }),
+    );
+    body.position.y = 1.05;
+    body.castShadow = true;
+    const screen = new Mesh(new BoxGeometry(0.32, 0.18, 0.04), new MeshBasicMaterial({ color: 0x62ff9a }));
+    screen.position.set(0, 1.34, -0.15);
+    const slot = new Mesh(new BoxGeometry(0.3, 0.06, 0.05), new MeshBasicMaterial({ color: 0x101418 }));
+    slot.position.set(0, 0.92, -0.15);
+    group.add(body, screen, slot);
+    group.position.set(x, 0, z);
+    group.rotation.y = rotationY;
+    this.root.add(group);
+    this.animatedScreens.push(screen);
+    return new SwitchInteractable(
+      id,
+      group,
+      'Lamp cell topped up.',
+      (game) => {
+        game.player.addBattery(Math.max(0, 100 - game.player.flashlightBattery));
+      },
+      '[E] CHARGE LAMP CELL',
+    );
+  }
+
   private createDoors(): void {
     this.doors.push(
       this.addDoor('door-intake', 4, 0, 'east', { locked: true, heavy: true, strange: true }),
       this.addDoor('door-lobby-maint', 29, 7, 'east', { heavy: true }),
       this.addDoor('door-lobby-research', 29, -6, 'east', { heavy: true }),
       this.addDoor('door-research', 39, -6, 'east', { locked: true, requiresPower: true, automatic: true }),
-      this.addDoor('door-security', 20, -9, 'south', {}),
+      this.addDoor('door-security', 20, -8, 'south', {}),
+      this.addDoor('door-level2', 20, -19, 'south', { locked: true, keycardId: 'keycard-level-2', heavy: true }),
+      this.addDoor('door-level3', 74, 13, 'south', { locked: true, keycardId: 'keycard-level-3', heavy: true }),
       this.addDoor('door-underground', 64, -6, 'east', { locked: true, heavy: true, strange: true }),
       this.addDoor('door-core', 95, -6, 'east', { locked: true, keycardId: 'keycard-level-3', heavy: true }),
     );
@@ -1410,6 +1520,51 @@ export class Facility {
     const locker2 = this.makeHideLocker('hide-locker-b', 67.2, -2.4);
     const underDesk = this.makeHideDesk('hide-desk-core', 97.6, -2.2);
 
+    // --- Level 2: Observation Deck ---
+    const footage = this.makePickup(
+      'pickup-footage',
+      this.createPickupMesh(24.2, 0.86, -30.4, 0xc9b26a, 'document'),
+      {
+        id: 'footage-chamber-4',
+        name: 'CHAMBER 4 FOOTAGE',
+        type: 'document',
+        description: 'A scratched data cartridge labeled CHAMBER 4 — the observation tape everyone claims never existed.',
+        quantity: 1,
+      },
+      (game) => {
+        game.progress.evidenceCollected += 1;
+        if (game.objectiveId === 'reachLevel2' || game.objectiveId === 'recoverFootage') {
+          game.setObjective('unlockUnderground');
+        }
+      },
+    );
+    const chargerL2 = this.makeCharger('charger-l2', 28.7, -37.5, -Math.PI / 2);
+    const hideL2 = this.makeHideLocker('hide-locker-l2', 14.5, -31.5);
+
+    // --- Level 3: Containment Storage ---
+    const level3Memo = this.makeDocument(
+      'doc-level3',
+      this.createDocumentMesh(78.6, 0.78, 30.6),
+      'LOWER ARRAY MEMO',
+      'Storage log:\n- Chamber 4 residue transferred below the shelter line\n- Observation deck staff recalled; feed rerouted to Security\n- The thing in the tank answers when spoken to. Do not read the labels aloud.\n- Level 2 and 3 readers were keyed to the old shift cards. Nothing else opens them.',
+      {
+        id: 'doc-level3',
+        name: 'LOWER ARRAY MEMO',
+        type: 'document',
+        description: 'A water-stained memo recovered from Level 3 storage.',
+        quantity: 1,
+      },
+    );
+    const battery4 = this.makePickup('pickup-battery-4', this.createPickupMesh(70.5, 0.72, 28.6, 0xc4b36a, 'battery'), {
+      id: 'battery-pack-4',
+      name: 'RESERVE BATTERY',
+      type: 'battery',
+      description: 'A reserve cell left in containment storage. Charge looks decent.',
+      quantity: 1,
+    }, (game) => game.player.addBattery(35));
+    const chargerL3 = this.makeCharger('charger-l3', 65.28, 33, Math.PI / 2);
+    const hideL3 = this.makeHideLocker('hide-locker-l3', 67.5, 24.6);
+
     const coreSwitch1 = this.makeCoreSwitch('core-switch-1', 99.5, 1.2, -9.8, 0, 0);
     const coreSwitch2 = this.makeCoreSwitch('core-switch-2', 104.0, 1.2, -12.2, 1, 1);
     const coreSwitch3 = this.makeCoreSwitch('core-switch-3', 108.4, 1.2, -9.8, 2, 2);
@@ -1437,6 +1592,13 @@ export class Facility {
       locker1,
       locker2,
       underDesk,
+      footage,
+      chargerL2,
+      hideL2,
+      level3Memo,
+      battery4,
+      chargerL3,
+      hideL3,
       coreSwitch1,
       coreSwitch2,
       coreSwitch3,
@@ -1450,16 +1612,23 @@ export class Facility {
       { id: 'lobby-west', position: new Vector3(14, 0, 0), neighbors: ['intake-hall', 'lobby-center', 'security-hall'], zone: 'lobby' },
       { id: 'lobby-center', position: new Vector3(21, 0, 0), neighbors: ['lobby-west', 'research-entry', 'maint-hub'], zone: 'lobby' },
       { id: 'security-hall', position: new Vector3(20, 0, -10), neighbors: ['lobby-west', 'security-room'], zone: 'security' },
-      { id: 'security-room', position: new Vector3(20, 0, -14), neighbors: ['security-hall'], zone: 'security' },
+      { id: 'security-room', position: new Vector3(20, 0, -14), neighbors: ['security-hall', 'l2-door'], zone: 'security' },
+      { id: 'l2-door', position: new Vector3(20, 0, -19), neighbors: ['security-room', 'l2-hall'], zone: 'level2' },
+      { id: 'l2-hall', position: new Vector3(20, 0, -23), neighbors: ['l2-door', 'l2-deck'], zone: 'level2' },
+      { id: 'l2-deck', position: new Vector3(20, 0, -34), neighbors: ['l2-hall'], zone: 'level2' },
       { id: 'maint-hub', position: new Vector3(34, 0, 7), neighbors: ['lobby-center', 'maint-gen'], zone: 'maintenance' },
       { id: 'maint-gen', position: new Vector3(34, 0, 18), neighbors: ['maint-hub'], zone: 'maintenance' },
       { id: 'research-entry', position: new Vector3(34, 0, -6), neighbors: ['lobby-center', 'research-lab'], zone: 'research' },
       { id: 'research-lab', position: new Vector3(48, 0, -6), neighbors: ['research-entry', 'archive-hall'], zone: 'research' },
       { id: 'archive-hall', position: new Vector3(60, 0, -6), neighbors: ['research-lab', 'underground-west'], zone: 'research' },
-      { id: 'underground-west', position: new Vector3(68, 0, -6), neighbors: ['archive-hall', 'underground-east', 'shelter'], zone: 'underground' },
-      { id: 'underground-east', position: new Vector3(82, 0, -6), neighbors: ['underground-west', 'core-hall'], zone: 'underground' },
-      { id: 'shelter', position: new Vector3(74, 0, 8), neighbors: ['underground-west'], zone: 'underground' },
-      { id: 'core-hall', position: new Vector3(90, 0, -6), neighbors: ['underground-east', 'core-room'], zone: 'core' },
+      { id: 'underground-west', position: new Vector3(68, 0, -6), neighbors: ['archive-hall', 'underground-east', 'underground-south'], zone: 'underground' },
+      { id: 'underground-east', position: new Vector3(82, 0, -6), neighbors: ['underground-west', 'underground-south', 'core-hall'], zone: 'underground' },
+      { id: 'underground-south', position: new Vector3(74, 0, -2), neighbors: ['underground-west', 'underground-east', 'shelter-entry'], zone: 'underground' },
+      { id: 'shelter-entry', position: new Vector3(74, 0, 1.5), neighbors: ['underground-south', 'shelter'], zone: 'underground' },
+      { id: 'shelter', position: new Vector3(74, 0, 8), neighbors: ['shelter-entry', 'l3-hall'], zone: 'underground' },
+      { id: 'l3-hall', position: new Vector3(74, 0, 16.5), neighbors: ['shelter', 'l3-core'], zone: 'level3' },
+      { id: 'l3-core', position: new Vector3(74, 0, 27), neighbors: ['l3-hall'], zone: 'level3' },
+      { id: 'core-hall', position: new Vector3(90.5, 0, -6), neighbors: ['underground-east', 'core-room'], zone: 'core' },
       { id: 'core-room', position: new Vector3(104, 0, -6), neighbors: ['core-hall'], zone: 'core' },
     ];
 
@@ -1473,6 +1642,8 @@ export class Facility {
     this.addCamera('research-cam', 'Research Corridor', new Vector3(52, 2.8, -12.8), new Vector3(48, 1.5, -6), 'Chamber corridor: occasional signal drop.');
     this.addCamera('archive-cam', 'Underground Tunnel', new Vector3(68, 2.6, -1), new Vector3(80, 1.5, -6), 'Archive blast hall and lower tunnel.');
     this.addCamera('core-cam', 'Core Chamber', new Vector3(104, 2.8, -13.2), new Vector3(104, 1.5, -6), 'Containment lattice observation.');
+    this.addCamera('level2-cam', 'Observation Deck', new Vector3(26.6, 2.7, -29.2), new Vector3(20, 1.4, -34), 'Level 2 observation deck feed.');
+    this.addCamera('level3-cam', 'Level 3 Storage', new Vector3(66.2, 2.7, 21.6), new Vector3(74, 1.4, 27), 'Level 3 containment storage feed.');
   }
 
   private createTerminals(): void {
@@ -1489,7 +1660,7 @@ export class Facility {
           body: 'If Maintenance lost their access cards, the Level 2 security card stays in the lower desk drawer. Do not send anyone alone below the archive gate again.',
         },
       ],
-      cameras: ['lobby-cam', 'research-cam'],
+      cameras: ['lobby-cam', 'research-cam', 'level2-cam'],
       actions: [
         { id: 'route-maintenance', label: 'Reroute grid diagnostics', description: 'Highlights Maintenance as the only active power route.' },
       ],
@@ -1529,7 +1700,7 @@ export class Facility {
           body: 'Once all three lattice switches are restored you may either stabilize the suppression field and escape, or purge the facility with the entity still inside. Stabilization preserves the research. Purge burns everything.',
         },
       ],
-      cameras: ['core-cam'],
+      cameras: ['core-cam', 'level3-cam'],
       actions: [
         { id: 'ending-stabilize', label: 'Stabilize lattice', description: 'Restore the field and flee while the facility holds.' },
         { id: 'ending-purge', label: 'Purge containment', description: 'Overload the core, destroy the wing, and escape.' },
@@ -1675,25 +1846,47 @@ export class Facility {
   }
 
   private addDoor(id: string, x: number, z: number, orientation: 'east' | 'south', options: DoorOptions): Door {
+    // Doorway openings are 2.8m wide. The assembly is built in local space with
+    // the opening along local Z (posts at both edges, header across the top) and
+    // the slab hinged at the -Z edge so it swings flat against the wall plane.
+    // 'south' doors (walls that run along world X) get rotated 90 degrees.
+    const doorWidth = 2.8;
     const doorRoot = new Group();
     doorRoot.position.set(x, 0, z);
-    const frameMaterial = new MeshStandardMaterial({ color: 0x444b55, roughness: 0.55, metalness: 0.7 });
-    const panelMaterial = new MeshStandardMaterial({ color: 0x1d252f, roughness: 0.55, metalness: 0.8 });
+    const frameMaterial = new MeshStandardMaterial({
+      color: 0x444b55,
+      roughness: 0.55,
+      metalness: 0.7,
+      bumpMap: metalBumpTexture(),
+      bumpScale: 0.01,
+    });
+    const panelMaterial = new MeshStandardMaterial({
+      color: 0x1d252f,
+      roughness: 0.5,
+      metalness: 0.8,
+      bumpMap: metalBumpTexture(),
+      bumpScale: 0.012,
+      envMapIntensity: 1.1,
+    });
 
-    const frameL = new Mesh(new BoxGeometry(0.18, 3.1, 0.18), frameMaterial);
+    const frameL = new Mesh(new BoxGeometry(0.22, 3.14, 0.22), frameMaterial);
     const frameR = frameL.clone();
-    const header = new Mesh(new BoxGeometry(1.42, 0.22, 0.18), frameMaterial);
-    const panel = new Mesh(new BoxGeometry(1.2, 2.75, 0.12), panelMaterial);
-    panel.castShadow = true;
-    panel.receiveShadow = true;
+    const header = new Mesh(new BoxGeometry(0.24, 0.24, doorWidth + 0.3), frameMaterial);
+    frameL.position.set(0, 1.57, -(doorWidth / 2 + 0.11));
+    frameR.position.set(0, 1.57, doorWidth / 2 + 0.11);
+    header.position.set(0, 3.08, 0);
+    for (const piece of [frameL, frameR, header]) {
+      piece.castShadow = true;
+      piece.receiveShadow = true;
+    }
 
     const panelGroup = new Group();
-    panel.position.set(0.6, 1.36, 0);
+    panelGroup.position.set(0, 0, -doorWidth / 2);
+    const panel = new Mesh(new BoxGeometry(0.12, 2.9, doorWidth - 0.12), panelMaterial);
+    panel.position.set(0, 1.45, (doorWidth - 0.12) / 2);
+    panel.castShadow = true;
+    panel.receiveShadow = true;
     panelGroup.add(panel);
-
-    frameL.position.set(0, 1.55, 0);
-    frameR.position.set(1.2, 1.55, 0);
-    header.position.set(0.6, 2.96, 0);
 
     doorRoot.add(frameL, frameR, header, panelGroup);
     if (orientation === 'south') {
@@ -1701,9 +1894,14 @@ export class Facility {
     }
     this.root.add(doorRoot);
 
+    // Solid collider spans the entire opening so closed doors fully block the
+    // gap and open doors (collider disabled) let you walk straight through.
     const collider = {
       id: `${id}-collider`,
-      box: new Box3().setFromCenterAndSize(new Vector3(x, 1.4, z), orientation === 'east' ? new Vector3(0.3, 3, 1.5) : new Vector3(1.5, 3, 0.3)),
+      box: new Box3().setFromCenterAndSize(
+        new Vector3(x, 1.5, z),
+        orientation === 'east' ? new Vector3(0.34, 3.1, doorWidth + 0.16) : new Vector3(doorWidth + 0.16, 3.1, 0.34),
+      ),
       enabled: true,
       tag: 'door',
     };
@@ -1969,20 +2167,29 @@ export class Facility {
   }
 
   private addFan(group: Group, x: number, z: number): void {
+    // Ceiling fan: rod from the ceiling, hub on the Y axis, four pitched blades
+    // laid out in the horizontal plane. The root spins around Y each frame.
     const root = new Group();
-    root.position.set(x, 2.7, z);
-    const hub = new Mesh(new BoxGeometry(0.15, 0.15, 0.15), new MeshStandardMaterial({ color: 0x69727a, roughness: 0.35, metalness: 0.85 }));
-    root.add(hub);
+    root.position.set(x, 2.78, z);
+    const metal = new MeshStandardMaterial({ color: 0x69727a, roughness: 0.35, metalness: 0.85 });
+    const rod = new Mesh(new CylinderGeometry(0.028, 0.028, 0.4, 8), metal);
+    rod.position.y = 0.2;
+    const hub = new Mesh(new CylinderGeometry(0.11, 0.13, 0.13, 14), metal);
+    const cap = new Mesh(new CylinderGeometry(0.07, 0.11, 0.09, 14), metal);
+    cap.position.y = -0.09;
+    root.add(rod, hub, cap);
+    const bladeMaterial = new MeshStandardMaterial({ color: 0x505962, roughness: 0.4, metalness: 0.7 });
     for (let index = 0; index < 4; index += 1) {
-      const blade = new Mesh(new BoxGeometry(0.8, 0.04, 0.12), new MeshStandardMaterial({ color: 0x505962, roughness: 0.4, metalness: 0.7 }));
-      blade.rotation.z = (Math.PI / 2) * index;
-      blade.position.x = 0.4;
       const bladeRoot = new Group();
-      bladeRoot.rotation.z = (Math.PI / 2) * index;
+      bladeRoot.rotation.y = (Math.PI / 2) * index;
+      const blade = new Mesh(new BoxGeometry(0.84, 0.022, 0.17), bladeMaterial);
+      blade.position.x = 0.52;
+      blade.rotation.x = 0.15; // slight pitch so it reads as a fan, not a cross
+      blade.castShadow = true;
       bladeRoot.add(blade);
       root.add(bladeRoot);
     }
-    root.userData.speed = 4 + Math.random() * 1.8;
+    root.userData.speed = 3.2 + Math.random() * 1.7;
     this.fans.push(root);
     group.add(root);
   }
@@ -2302,6 +2509,8 @@ export class Facility {
       case 'research': return 'Research Wing';
       case 'maintenance': return 'Maintenance';
       case 'underground': return 'Underground';
+      case 'level2': return 'Observation Deck';
+      case 'level3': return 'Level 3 Storage';
       case 'core': return 'Suppression Core';
       default:
         return 'Facility';

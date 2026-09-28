@@ -19,7 +19,9 @@ export type ZoneId =
   | 'research'
   | 'maintenance'
   | 'underground'
-  | 'core';
+  | 'core'
+  | 'level2'
+  | 'level3';
 
 export type ItemType =
   | 'battery'
@@ -162,6 +164,8 @@ export interface GameSettings {
     screenShake: boolean;
     flashEffects: boolean;
     fov: number;
+    hints: boolean;
+    coordinates: boolean;
   };
 }
 

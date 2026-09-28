@@ -86,6 +86,12 @@ export class UIManager {
   private readonly healthValue: HTMLDivElement;
   private readonly staminaValue: HTMLDivElement;
   private readonly zoneValue: HTMLDivElement;
+  private readonly hintBlock: HTMLDivElement;
+  private readonly hintList: HTMLUListElement;
+  private readonly coordsBlock: HTMLDivElement;
+  private readonly coordValue: HTMLDivElement;
+  private hintsEnabled = true;
+  private lastHintKey = '';
 
   private subtitleTimer = 0;
   private saveMode: 'save' | 'load' = 'load';
@@ -143,6 +149,10 @@ export class UIManager {
     this.healthValue = this.root.querySelector<HTMLDivElement>('#health-value')!;
     this.staminaValue = this.root.querySelector<HTMLDivElement>('#stamina-value')!;
     this.zoneValue = this.root.querySelector<HTMLDivElement>('#zone-value')!;
+    this.hintBlock = this.root.querySelector<HTMLDivElement>('#hint-block')!;
+    this.hintList = this.root.querySelector<HTMLUListElement>('#hint-list')!;
+    this.coordsBlock = this.root.querySelector<HTMLDivElement>('#coords-block')!;
+    this.coordValue = this.root.querySelector<HTMLDivElement>('#coord-value')!;
 
     this.bindMenu();
     this.buildSettingsPanel(settings);
@@ -223,13 +233,33 @@ export class UIManager {
       .join('');
   }
 
-  public updateHUD(values: { battery: number; lowBattery: boolean; health: number; stamina: number; zone: string; objective: string }): void {
+  public updateHUD(values: {
+    battery: number;
+    lowBattery: boolean;
+    health: number;
+    stamina: number;
+    zone: string;
+    objective: string;
+    hints: string[];
+    coordinates: string;
+    showCoordinates: boolean;
+  }): void {
     this.batteryValue.textContent = `${Math.round(values.battery)}%`;
     this.batteryLow.classList.toggle('hidden', !values.lowBattery);
     this.healthValue.textContent = `${Math.round(values.health)}%`;
     this.staminaValue.textContent = `${Math.round(values.stamina)}%`;
     this.zoneValue.textContent = values.zone;
     this.objective.textContent = values.objective;
+    this.hintBlock.classList.toggle('hidden', !this.hintsEnabled);
+    const hintKey = values.hints.join(' | ');
+    if (this.hintsEnabled && hintKey !== this.lastHintKey) {
+      this.lastHintKey = hintKey;
+      this.hintList.innerHTML = values.hints.map((hint) => `<li>${hint}</li>`).join('');
+    }
+    this.coordsBlock.classList.toggle('hidden', !values.showCoordinates);
+    if (values.showCoordinates) {
+      this.coordValue.textContent = values.coordinates;
+    }
   }
 
   public setPrompt(text: string | null): void {
@@ -376,6 +406,7 @@ export class UIManager {
     this.pendingSettings = JSON.parse(JSON.stringify(settings)) as GameSettings;
     this.refreshSettingsInputs();
     this.setSubtitleScale(settings.accessibility.subtitleSize);
+    this.hintsEnabled = settings.accessibility.hints !== false;
     const note = this.root.querySelector<HTMLParagraphElement>('#quality-note');
     if (note) {
       const preset = getPreset(settings.graphics.quality);
@@ -630,6 +661,8 @@ export class UIManager {
     addRange(accessibilityContainer, 'Subtitle Size', 'accessibility.subtitleSize', 0.8, 1.4, 0.05);
     addToggle(accessibilityContainer, 'Screen Shake', 'accessibility.screenShake');
     addToggle(accessibilityContainer, 'Flash Effects', 'accessibility.flashEffects');
+    addToggle(accessibilityContainer, 'Context Hints (top right)', 'accessibility.hints');
+    addToggle(accessibilityContainer, 'XYZ Coordinates', 'accessibility.coordinates');
     addRange(accessibilityContainer, 'Field of View', 'accessibility.fov', 60, 110, 1);
 
     this.root.querySelector<HTMLButtonElement>('#settings-apply-button')!.addEventListener('click', () => this.onApplySettings?.(this.pendingSettings));
@@ -744,6 +777,14 @@ export class UIManager {
             <div class="hud-block">
               <span class="label">ZONE</span>
               <strong id="zone-value">Intake Chamber</strong>
+            </div>
+            <div class="hud-block coords-block hidden" id="coords-block">
+              <span class="label">XYZ</span>
+              <strong id="coord-value">0.0 / 0.0 / 0.0</strong>
+            </div>
+            <div class="hud-block hint-block" id="hint-block">
+              <span class="label">HINTS</span>
+              <ul id="hint-list"></ul>
             </div>
           </div>
           <div id="objective-hud" class="hud-objective">

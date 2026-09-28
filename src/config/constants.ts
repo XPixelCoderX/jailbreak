@@ -97,6 +97,8 @@ export const DEFAULT_SETTINGS = {
     screenShake: true,
     flashEffects: true,
     fov: DEFAULT_FOV,
+    hints: true,
+    coordinates: false,
   },
 } as const;
 
@@ -115,8 +117,11 @@ export const OBJECTIVE_TEXT = {
   leaveIntake: 'Exit the intake chamber when the lockdown lifts.',
   restoreResearchPower: 'Restore power to the Research Wing from Maintenance.',
   accessResearch: 'Use the Research Wing terminal to learn what happened.',
+  reachLevel2: 'Use the Level 2 card to enter the Observation Deck.',
+  recoverFootage: 'Recover the chamber footage from the Observation Deck.',
   unlockUnderground: 'Find the archive access code and enter the Underground.',
   findCoreKey: 'Search the Underground for the Suppression Core keycard.',
   reachCore: 'Reach the Suppression Core and restore the containment lattice.',
+  enterLevel3: 'Descend to Level 3 and inspect the containment storage.',
   escape: 'Choose the fate of the core and escape the facility.',
 } as const;
