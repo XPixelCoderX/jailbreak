@@ -116,6 +116,12 @@ export class InputManager {
     return code ? this.justPressed.has(code) : false;
   }
 
+  public consumeKeyPress(code: string): boolean {
+    if (!this.justPressed.has(code)) return false;
+    this.justPressed.delete(code);
+    return true;
+  }
+
   public consumeActionPress(action: ActionName): boolean {
     const code = this.bindings[action];
     if (!code || !this.justPressed.has(code)) {

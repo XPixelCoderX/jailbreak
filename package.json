@@ -6,13 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "relay": "node server/start.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "three": "^0.179.1"
+    "three": "^0.179.1",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   }

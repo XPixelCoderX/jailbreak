@@ -1,6 +1,11 @@
 import {
   ACESFilmicToneMapping,
   Color,
+  Group,
+  Mesh,
+  MeshStandardMaterial,
+  CylinderGeometry,
+  SphereGeometry,
   PCFShadowMap,
   PCFSoftShadowMap,
   PerspectiveCamera,
@@ -47,6 +52,7 @@ import type {
 } from '../types';
 import { cloneDefaultSettings } from '../types';
 import { UIManager } from '../ui/UIManager';
+import { Multiplayer } from '../network/Multiplayer';
 import { Facility } from '../world/Facility';
 
 interface PendingKeypad {
@@ -71,6 +77,12 @@ export class Game {
   public puzzles!: PuzzleState;
   public objectives: Objective[] = [];
 
+  private readonly multiplayer = new Multiplayer();
+  private readonly partner = new Group();
+  private networkTimer = 0;
+  private hasGun = false;
+  private gunPickup = new Group();
+  private lastShot = 0;
   private readonly loop: GameLoop;
   private readonly raycaster = new Raycaster();
   private readonly pointer = new Vector2();
@@ -131,6 +143,40 @@ export class Game {
     this.terminalRenderer.setSize(480, 270, false);
     this.terminalRenderer.outputColorSpace = this.renderer.outputColorSpace;
 
+    const suit = new MeshStandardMaterial({ color: 0x638eaa, emissive: 0x122838 });
+    const body = new Mesh(new CylinderGeometry(0.28, 0.34, 1.2, 8), suit);
+    body.position.y = 0.85;
+    const head = new Mesh(new SphereGeometry(0.22, 10, 8), new MeshStandardMaterial({ color: 0xc6d9df }));
+    head.position.y = 1.62;
+    this.partner.add(body, head);
+    this.partner.visible = false;
+    this.scene.add(this.partner);
+    this.multiplayer.onSignal = (code) => this.ui.setDirectCode(code);
+    this.multiplayer.onStatus = (text) => {
+      this.ui.setMultiplayerStatus(text);
+      this.ui.setInviteCode(this.multiplayer.code);
+    };
+    this.multiplayer.onChat = (text, sender) => this.ui.addChat(text, sender);
+    this.multiplayer.onPosition = (position, yaw) => { this.partner.position.set(position[0], position[1], position[2]); this.partner.rotation.y = yaw; this.partner.visible = true; };
+    this.multiplayer.onShot = (origin, direction) => {
+      if (this.state !== GameState.PLAYING) return;
+      const ray = new Raycaster(new Vector3(...origin), new Vector3(...direction).normalize(), 0, 30);
+      if (ray.ray.distanceToPoint(this.player.camera.getWorldPosition(new Vector3())) < 0.55) {
+        this.player.damage(18);
+        this.ui.flashNotice('Hit by partner fire!');
+      }
+    };
+    this.renderer.domElement.addEventListener('mousedown', (event) => {
+      if (event.button !== 0 || !this.input.isPointerLocked() || this.state !== GameState.PLAYING || !this.multiplayer.role || !this.hasGun) return;
+      if (performance.now() - this.lastShot < 350) return;
+      this.lastShot = performance.now();
+      const origin = this.player.camera.getWorldPosition(new Vector3());
+      const direction = this.player.camera.getWorldDirection(new Vector3());
+      this.multiplayer.shoot(origin.toArray(), direction.toArray());
+      this.notifyNoise(this.player.position, 1);
+      this.ui.flashNotice('Shot fired');
+    });
+    this.multiplayer.onDisconnect = () => { this.partner.visible = false; this.ui.root.querySelector('#chat-panel')?.classList.add('hidden'); };
     this.bindUI();
     this.bindDOM();
     this.initialize().catch((error) => this.handleFatalError(error));
@@ -418,6 +464,13 @@ export class Game {
   }
 
   private bindUI(): void {
+    this.ui.onDirectHost = () => { this.ui.setDirectCode(''); void this.multiplayer.hostDirect(); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
+    this.ui.onDirectJoin = (offer) => { this.ui.setDirectCode(''); void this.multiplayer.joinDirect(offer); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
+    this.ui.onDirectAnswer = (answer) => { void this.multiplayer.acceptAnswer(answer); };
+    this.ui.onHost = () => { this.multiplayer.connect('host'); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
+    this.ui.onJoin = (code) => { this.multiplayer.connect('join', code); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
+    this.ui.onLeave = () => { this.multiplayer.disconnect(); this.ui.setMultiplayerStatus('Not connected'); this.ui.setInviteCode(''); };
+    this.ui.onChatSend = (text) => this.multiplayer.chat(text);
     this.ui.onNewGame = () => this.startNewGame();
     this.ui.onContinue = () => this.continueGame();
     this.ui.onOpenLoad = () => this.openSaveLoad('load');
@@ -465,6 +518,7 @@ export class Game {
 
   private buildWorld(): void {
     this.scene = new Scene();
+    this.partner.visible = false;
     this.scene.background = new Color(0x0a1018);
     this.scene.environment = this.environmentTexture;
     this.facility = new Facility(this.scene, this.audio);
@@ -478,7 +532,17 @@ export class Game {
     for (const monster of this.monsters) {
       monster.reset(this.facility);
     }
-    this.scene.add(this.player.body, this.suppressor.root, ...this.monsters.map((monster) => monster.root));
+    this.hasGun = false;
+    this.gunPickup = new Group();
+    const handle = new Mesh(new CylinderGeometry(0.075, 0.09, 0.36, 8), new MeshStandardMaterial({ color: 0x283b44, metalness: 0.7, roughness: 0.3 }));
+    handle.rotation.x = 0.4;
+    const barrel = new Mesh(new CylinderGeometry(0.07, 0.07, 0.42, 8), new MeshStandardMaterial({ color: 0x869fa7, metalness: 0.85, roughness: 0.25 }));
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, 0.16, -0.2);
+    this.gunPickup.add(handle, barrel);
+    this.gunPickup.position.set(3, 0.85, 2);
+    this.scene.add(this.gunPickup);
+    this.scene.add(this.player.body, this.partner, this.suppressor.root, ...this.monsters.map((monster) => monster.root));
     this.menuCamera.position.set(17, 1.8, 8);
     this.menuCamera.lookAt(22, 1.5, 0);
     this.postfx?.setScene(this.scene);
@@ -544,6 +608,7 @@ export class Game {
     this.input.exitPointerLock();
     this.ui.showLoading(false);
     this.ui.showMainMenu(true);
+    this.ui.root.querySelector('#multiplayer-panel')?.classList.add('hidden');
     this.ui.showPause(false);
     this.ui.showSettings(false);
     this.ui.showCredits(false);
@@ -793,6 +858,11 @@ export class Game {
     }
 
     this.handleGlobalInputs();
+    this.networkTimer += dt;
+    if (this.multiplayer.role && this.networkTimer >= 0.05 && this.player && this.state === GameState.PLAYING) {
+      this.networkTimer = 0;
+      this.multiplayer.sendPosition(this.player.position.toArray(), this.player.yaw);
+    }
     const now = performance.now() * 0.001;
 
     const menuContext = this.state === GameState.MAIN_MENU || (this.previousState === GameState.MAIN_MENU && (this.state === GameState.SETTINGS || this.overlayKind === 'save-load'));
@@ -849,6 +919,16 @@ export class Game {
 
   private updateGameplay(dt: number, now: number): void {
     this.player.update(dt, this.input, this.facility, this.audio, this.settings);
+    const gunLabel = this.ui.root.querySelector('#gun-status')!;
+    gunLabel.classList.toggle('hidden', !this.multiplayer.role);
+    if (this.multiplayer.role) {
+      this.gunPickup.visible = !this.hasGun;
+      this.gunPickup.rotation.y += dt * 0.7;
+      if (!this.hasGun && this.player.position.distanceTo(this.gunPickup.position) < 2.5) {
+        this.ui.setGunStatus('[G] PICK UP PISTOL');
+        if (this.input.consumeKeyPress('KeyG')) { this.hasGun = true; this.ui.flashNotice('Pistol acquired. Left click to fire.'); }
+      } else this.ui.setGunStatus(this.hasGun ? 'PISTOL EQUIPPED · LEFT CLICK TO FIRE' : 'FIND THE PISTOL NEAR THE START');
+    } else this.gunPickup.visible = false;
     this.facility.setListener(this.player.position);
     this.facility.update(dt, now, this.progress, this.puzzles);
     this.updateAutomaticDoors();
