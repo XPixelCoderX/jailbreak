@@ -1,22 +1,13 @@
-name: Deploy Game to GitHub Pages
+name: Vite Dev Server
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
-  build:
+  dev:
     runs-on: ubuntu-latest
 
     steps:
@@ -31,23 +22,21 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build game
-        run: npm run build
+      - name: Start Vite
+        run: |
+          npm run dev -- --host 0.0.0.0 --port 5173 > vite.log 2>&1 &
+          sleep 5
 
-      - name: Upload game
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./dist
+      - name: Show Vite output
+        run: cat vite.log
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
+      - name: Install Cloudflare Tunnel
+        run: |
+          curl -L \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o cloudflared
+          chmod +x cloudflared
 
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Expose Vite
+        run: |
+          ./cloudflared tunnel --url http://127.0.0.1:5173
