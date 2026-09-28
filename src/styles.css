@@ -701,3 +701,6 @@ h3 {
 #chat-form { display: flex; gap: .4rem; }
 #chat-form input { min-width: 0; }
 @media(max-height: 700px) { .menu-center { padding: 1rem 2rem; } .menu-center::before { margin-bottom: 1rem; } .main-nav { margin-top: 1rem; } .main-nav button { padding: .55rem; } .menu-footer { display: none; } }
+.gun-status { position: absolute; bottom: 13%; left: 50%; transform: translateX(-50%); text-align: center; padding: .55rem 1rem; border: 1px solid var(--border); background: #081a1dcc; color: #bde4e4; font-size: .75rem; letter-spacing: .12em; white-space: nowrap; }
+.invite-row { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #a9d0d0; font-size: .72rem; letter-spacing: .15em; }
+.invite-row strong { display: block; font-size: 1.5rem; letter-spacing: .3em; color: #f1ffff; margin-top: .3rem; }

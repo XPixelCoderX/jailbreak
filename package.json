@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "relay": "node server/start.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "three": "^0.179.1",

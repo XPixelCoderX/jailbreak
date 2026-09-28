@@ -499,6 +499,14 @@ export class UIManager {
     });
   }
 
+  public setGunStatus(text: string): void {
+    this.root.querySelector<HTMLElement>('#gun-status')!.textContent = text;
+  }
+
+  public setInviteCode(code: string): void {
+    this.root.querySelector<HTMLElement>('#invite-code')!.textContent = code || '------';
+  }
+
   public setMultiplayerStatus(text: string): void {
     for (const id of ['multiplayer-status', 'chat-status']) {
       const element = this.root.querySelector<HTMLElement>(`#${id}`);
@@ -520,10 +528,20 @@ export class UIManager {
   private bindMenu(): void {
     this.root.querySelector('#multiplayer-button')!.addEventListener('click', () => this.root.querySelector('#multiplayer-panel')!.classList.remove('hidden'));
     this.root.querySelector('#multiplayer-close')!.addEventListener('click', () => this.root.querySelector('#multiplayer-panel')!.classList.add('hidden'));
-    this.root.querySelector('#host-button')!.addEventListener('click', () => this.onHost?.());
+    const relayInput = this.root.querySelector<HTMLInputElement>('#relay-url')!;
+    relayInput.value = localStorage.getItem('suppression-relay-url') || '';
+    relayInput.addEventListener('change', () => localStorage.setItem('suppression-relay-url', relayInput.value.trim()));
+    this.root.querySelector('#host-button')!.addEventListener('click', () => { localStorage.setItem('suppression-relay-url', relayInput.value.trim()); this.onHost?.(); });
     this.root.querySelector('#join-form')!.addEventListener('submit', (event) => {
       event.preventDefault();
+      localStorage.setItem('suppression-relay-url', relayInput.value.trim());
       this.onJoin?.(this.root.querySelector<HTMLInputElement>('#room-code')!.value.trim());
+    });
+    this.root.querySelector('#copy-code-button')!.addEventListener('click', async () => {
+      const code = this.root.querySelector<HTMLElement>('#invite-code')!.textContent || '';
+      if (code === '------') return;
+      try { await navigator.clipboard.writeText(code); this.setMultiplayerStatus(`Copied invite code ${code}`); }
+      catch { this.setMultiplayerStatus(`Copy code manually: ${code}`); }
     });
     this.root.querySelector('#leave-button')!.addEventListener('click', () => this.onLeave?.());
     this.root.querySelector<HTMLFormElement>('#chat-form')!.addEventListener('submit', (event) => {
@@ -798,8 +816,11 @@ export class UIManager {
           <div class="panel narrow">
             <p class="eyebrow">COOPERATIVE CONNECTION / 02 PLAYERS</p>
             <h2>Multiplayer</h2>
-            <p class="menu-help">Host a room and share its code, or enter a friend's code to join. Each player explores their own session; positions and chat are shared.</p>
+            <p class="menu-help">Host a room and share its code, or enter a friend's code to join. Each player explores their own session; positions, chat and shots are shared. Find a pistol near the starting area.</p>
             <div id="multiplayer-status" class="connection-status">Not connected</div>
+            <div class="invite-row"><span>INVITE CODE <strong id="invite-code">------</strong></span><button id="copy-code-button" type="button">COPY</button></div>
+            <label class="menu-help" for="relay-url">Relay URL (optional in local development; required on GitHub Pages)</label>
+            <input id="relay-url" type="url" placeholder="wss://your-relay.example/ws" autocomplete="url">
             <button id="host-button">HOST A ROOM</button>
             <form id="join-form" class="join-form"><input id="room-code" maxlength="6" placeholder="ROOM CODE" aria-label="Room code" autocomplete="off" required><button type="submit">JOIN ROOM</button></form>
             <div class="panel-buttons horizontal"><button id="leave-button">DISCONNECT</button><button id="multiplayer-close">BACK</button></div>
@@ -846,6 +867,7 @@ export class UIManager {
             <span class="label">OBJECTIVE</span>
             <strong id="objective-text">Wake up.</strong>
           </div>
+          <div id="gun-status" class="gun-status hidden"></div>
           <div id="interaction-prompt" class="interaction-prompt hidden"></div>
           <div id="crosshair"></div>
         </section>
