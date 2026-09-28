@@ -114,9 +114,6 @@ export class Facility {
   private researchLightLevel = 0.08;
   private emergencyLightLevel = 1;
   private coreLightLevel = 0.1;
-  private worldBoundsMin = new Vector3(-20, -5, -70);
-  private worldBoundsMax = new Vector3(140, 12, 70);
-  private boundaryViolations: { position: Vector3; time: number }[] = [];
 
   // Atmosphere / RTX-style systems
   private readonly lightShafts: { mesh: Mesh; light: PointLight }[] = [];
@@ -210,9 +207,9 @@ export class Facility {
     const graphics = settings.graphics;
     const preset = getPreset(graphics.quality);
 
-    // --- Dynamic shadow budget - RTX enhanced -------------------------------------------
+    // --- Dynamic shadow budget -------------------------------------------
     const mapSize = shadowMapSizeFor(graphics.shadowQuality);
-    const budget = graphics.shadowQuality === 'off' ? 0 : shadowLightBudget(graphics.lightingQuality, graphics.quality);
+    const budget = graphics.shadowQuality === 'off' ? 0 : shadowLightBudget(graphics.lightingQuality);
     const desired = new Set<PointLight>();
     let assigned = 0;
     if (mapSize > 0 && budget > 0) {
@@ -254,8 +251,8 @@ export class Facility {
       }
     }
 
-    // --- Volumetric light shafts - RTX enhanced -----------------------------------------
-    const shaftCount = shaftBudget(graphics.lightingQuality, graphics.volumetrics, graphics.quality);
+    // --- Volumetric light shafts -----------------------------------------
+    const shaftCount = shaftBudget(graphics.lightingQuality, graphics.volumetrics);
     this.lightShafts.forEach((entry, index) => {
       entry.mesh.visible = index < shaftCount;
     });
@@ -606,37 +603,6 @@ export class Facility {
     if (coreDoor && progress.coreKeyFound) {
       coreDoor.forceUnlock();
     }
-
-    // Expansion doors
-    const officeDoor = this.getDoor('door-office-main');
-    if (officeDoor && puzzles.officeDoorUnlocked) {
-      officeDoor.forceUnlock();
-    }
-
-    const containmentDoor = this.getDoor('door-containment');
-    if (containmentDoor && progress.researchPowerRestored) {
-      containmentDoor.forceUnlock();
-    }
-
-    const generatorDoor = this.getDoor('door-generator-complex');
-    if (generatorDoor && puzzles.generatorSwitches.filter(Boolean).length >= 2) {
-      generatorDoor.forceUnlock();
-    }
-
-    const maintenanceLowerDoor = this.getDoor('door-maintenance-lower');
-    if (maintenanceLowerDoor && progress.checkpointUnlocked) {
-      maintenanceLowerDoor.forceUnlock();
-    }
-
-    const outdoorDoor = this.getDoor('door-outdoor');
-    if (outdoorDoor && progress.coreKeyFound) {
-      outdoorDoor.forceUnlock();
-    }
-
-    const l2North = this.getDoor('door-level2-north');
-    if (l2North && progress.officeUnlocked) {
-      l2North.forceUnlock();
-    }
   }
 
   public resolvePlayerCollision(next: Vector3, previous: Vector3, radius: number): void {
@@ -663,131 +629,6 @@ export class Facility {
         break;
       }
     }
-  }
-
-  /**
-   * Hard world boundaries - prevents any escape via jumping, crouching, climbing or corner exploits.
-   * Uses both physical collider walls and direct position clamping as a safety net.
-   */
-  public enforceWorldBoundaries(position: Vector3, player?: { verticalVelocity: number; isGrounded?: boolean }): void {
-    let clamped = false;
-    const original = position.clone();
-
-    // Expand bounds dynamically based on zones to allow future expansion
-    const minX = this.worldBoundsMin.x;
-    const maxX = this.worldBoundsMax.x;
-    const minZ = this.worldBoundsMin.z;
-    const maxZ = this.worldBoundsMax.z;
-
-    if (position.x < minX) {
-      position.x = minX;
-      clamped = true;
-    }
-    if (position.x > maxX) {
-      position.x = maxX;
-      clamped = true;
-    }
-    if (position.z < minZ) {
-      position.z = minZ;
-      clamped = true;
-    }
-    if (position.z > maxZ) {
-      position.z = maxZ;
-      clamped = true;
-    }
-
-    // Ceiling and floor safety
-    if (position.y < -2) {
-      position.y = 0;
-      if (player) {
-        (player as any).verticalVelocity = 0;
-      }
-      clamped = true;
-    }
-    if (position.y > 4.5) {
-      position.y = 4.5;
-      if (player) {
-        (player as any).verticalVelocity = Math.min(0, (player as any).verticalVelocity ?? 0);
-      }
-      clamped = true;
-    }
-
-    // If player is trying to escape through a gap, push them back and log violation for debug
-    if (clamped && original.distanceTo(position) > 0.5) {
-      const now = performance.now();
-      this.boundaryViolations.push({ position: original.clone(), time: now });
-      // Keep only last 20 violations
-      if (this.boundaryViolations.length > 20) {
-        this.boundaryViolations.shift();
-      }
-      // In debug mode, log
-      if ((window as any).LOST_SUPPRESSION_DEBUG) {
-        console.warn('[Boundary] Player clamped from', original, 'to', position.clone());
-      }
-    }
-
-    // Additional check: ensure player is inside at least one zone or within 3m of a zone
-    const insideAnyZone = this.zones.some(zone => {
-      const expanded = zone.bounds.clone();
-      expanded.min.x -= 3;
-      expanded.max.x += 3;
-      expanded.min.z -= 3;
-      expanded.max.z += 3;
-      return expanded.containsPoint(position);
-    });
-
-    if (!insideAnyZone) {
-      // Find nearest zone center and push towards it
-      let nearestDist = Infinity;
-      let nearestCenter = new Vector3(20, 0, 0);
-      for (const zone of this.zones) {
-        const center = zone.bounds.getCenter(new Vector3());
-        const dist = center.distanceToSquared(position);
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearestCenter = center;
-        }
-      }
-      // Don't teleport, just prevent further escape by clamping to nearest valid
-      const dir = new Vector3().subVectors(nearestCenter, position).normalize();
-      position.add(dir.multiplyScalar(0.1));
-    }
-  }
-
-  /**
-   * Developer debug utility to test for escape points across the entire map
-   */
-  public debugCheckBoundaries(): { violations: number; details: string[] } {
-    const details: string[] = [];
-    let violations = 0;
-
-    // Check all colliders for gaps larger than player radius
-    for (let i = 0; i < this.colliders.length; i++) {
-      for (let j = i + 1; j < this.colliders.length; j++) {
-        const a = this.colliders[i];
-        const b = this.colliders[j];
-        if (!a.enabled || !b.enabled) continue;
-        // Simple gap check - if boxes are close but not overlapping and gap < 0.7 (player diameter + margin)
-        const gapX = Math.max(0, Math.max(a.box.min.x, b.box.min.x) - Math.min(a.box.max.x, b.box.max.x));
-        const gapZ = Math.max(0, Math.max(a.box.min.z, b.box.min.z) - Math.min(a.box.max.z, b.box.max.z));
-        if (gapX > 0 && gapX < 0.7 && Math.abs(a.box.min.z - b.box.min.z) < 5) {
-          details.push(`Potential X gap ${gapX.toFixed(2)}m between ${a.id} and ${b.id}`);
-          violations++;
-        }
-        if (gapZ > 0 && gapZ < 0.7 && Math.abs(a.box.min.x - b.box.min.x) < 5) {
-          details.push(`Potential Z gap ${gapZ.toFixed(2)}m between ${a.id} and ${b.id}`);
-          violations++;
-        }
-      }
-    }
-
-    // Check boundary violations log
-    if (this.boundaryViolations.length > 0) {
-      details.push(`${this.boundaryViolations.length} recent boundary clamp events`);
-      violations += this.boundaryViolations.length;
-    }
-
-    return { violations, details };
   }
 
   public getFootstepSurface(position: Vector3): 'concrete' | 'metal' | 'water' {
@@ -958,7 +799,6 @@ export class Facility {
       west: [{ center: 0, width: 3 }],
       east: [{ center: -6, width: 2.8 }, { center: 7, width: 2.8 }],
       north: [{ center: 0, width: 2.8 }],
-      south: [{ center: -2, width: 2.8 }, { center: 6, width: 2.8 }],
     }, 0x1f242b, hallwayTexture);
     this.decorateLobby(lobby.group);
 
@@ -970,13 +810,7 @@ export class Facility {
       south: [{ center: 0, width: 2.8 }],
     }, 0x21242a, hallwayTexture);
     this.decorateHallway(maintHall.group, 34, 7, 10, 6, 2);
-    // Clean placement: moved east to 40,18 to avoid overlap with officeMain (20,22)
-    const maintenance = this.createRoom('maintenance', 40, 18, 16, 16, {
-      north: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-      west: [{ center: -4, width: 2.8 }],
-      east: [{ center: -4, width: 2.8 }],
-    }, 0x242a31, hallwayTexture);
+    const maintenance = this.createRoom('maintenance', 34, 18, 16, 16, { north: [{ center: 0, width: 2.8 }] }, 0x242a31, hallwayTexture);
     this.decorateMaintenance(maintenance.group);
 
     const researchHall = this.createRoom('research', 34, -6, 10, 6, {
@@ -987,8 +821,6 @@ export class Facility {
     const research = this.createRoom('research', 48, -6, 18, 16, {
       west: [{ center: 0, width: 2.8 }],
       east: [{ center: 0, width: 2.6 }],
-      north: [{ center: -4, width: 2.8 }],
-      south: [{ center: 5, width: 2.8 }],
     }, 0x1e2329, hallwayTexture);
     this.decorateResearch(research.group);
 
@@ -1016,10 +848,7 @@ export class Facility {
       east: [{ center: 0, width: 2.8 }],
     }, 0x181d23, hallwayTexture);
     this.decorateHallway(coreHall.group, 90.5, -6, 9, 8, 5);
-    const core = this.createRoom('core', 104, -6, 18, 16, {
-      west: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-    }, 0x141a22, hallwayTexture);
+    const core = this.createRoom('core', 104, -6, 18, 16, { west: [{ center: 0, width: 2.8 }] }, 0x141a22, hallwayTexture);
     this.decorateCore(core.group);
 
     // --- Level 2: Observation Deck (north of Security, keycard sealed) ------
@@ -1030,7 +859,6 @@ export class Facility {
     this.decorateLinkHallway(l2Corridor.group, 20, -23, 6, 8, 3);
     const level2 = this.createRoom('level2', 20, -34, 16, 14, {
       south: [{ center: 0, width: 2.8 }],
-      north: [{ center: 0, width: 2.8 }],
     }, 0x1e2433, hallwayTexture);
     this.decorateLevel2(level2.group);
 
@@ -1042,204 +870,11 @@ export class Facility {
     this.decorateLinkHallway(l3Corridor.group, 74, 16.5, 6, 7, 5);
     const level3 = this.createRoom('level3', 74, 27, 18, 14, {
       north: [{ center: 0, width: 2.8 }],
-      south: [{ center: -4, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
     }, 0x171a22, hallwayTexture);
     this.decorateLevel3(level3.group);
 
-    // ==================== EXPANSION: OFFICE WING - CLEAN LAYOUT NORTH OF LOBBY ====================
-    const officeHall = this.createRoom('office', 20, 11, 8, 6, {
-      north: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-    }, 0x232830, hallwayTexture);
-    this.decorateOffice(officeHall.group, 20, 11, false);
-
-    // Moved to 20,22 to avoid overlap with maintenance (now at 40,18)
-    const officeMain = this.createRoom('office', 20, 22, 18, 16, {
-      north: [{ center: 0, width: 2.8 }],
-      west: [{ center: 4, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 1.8 }],
-    }, 0x252b33, hallwayTexture);
-    this.decorateOffice(officeMain.group, 20, 22, true);
-
-    const officeStorage = this.createRoom('storage', 6, 22, 12, 10, {
-      east: [{ center: 2, width: 2.8 }],
-    }, 0x1f252c, hallwayTexture);
-    this.decorateStorage(officeStorage.group);
-
-    const breakRoom = this.createRoom('abandoned', 6, 10, 12, 10, {
-      north: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-    }, 0x22272e, hallwayTexture);
-    this.decorateAbandoned(breakRoom.group);
-
-    // ==================== EXPANSION: MEDICAL BAY ====================
-    const medicalCorridor = this.createRoom('medical', 12, -8, 10, 4, {
-      west: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-    }, 0x1e262e, hallwayTexture);
-    this.decorateHallway(medicalCorridor.group, 12, -8, 10, 4, 11);
-
-    const medicalBay = this.createRoom('medical', 4, -14, 16, 14, {
-      east: [{ center: 6, width: 2.8 }, { center: -6, width: 1.8 }],
-      south: [{ center: 0, width: 2.8 }],
-    }, 0x1c242c, hallwayTexture);
-    this.decorateMedical(medicalBay.group);
-
-    const medicalStorage = this.createRoom('storage', 4, -26, 10, 10, {
-      north: [{ center: 0, width: 2.8 }],
-    }, 0x1e252e, hallwayTexture);
-    this.decorateStorage(medicalStorage.group);
-
-    // ==================== EXPANSION: CHECKPOINT & SECURITY EXTENSION ====================
-    const checkpoint = this.createRoom('checkpoint', 29, 0, 10, 10, {
-      west: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-      north: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-    }, 0x242b35, hallwayTexture);
-    this.decorateCheckpoint(checkpoint.group);
-
-    // ==================== EXPANSION: CONTAINMENT ANNEX - BEHEMOTH BOSS ARENA ====================
-    const containmentCorridor = this.createRoom('containment', 48, -16, 8, 8, {
-      north: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-    }, 0x1a2028, hallwayTexture);
-    this.decorateLinkHallway(containmentCorridor.group, 48, -16, 8, 8, 12);
-
-    const containmentAnnex = this.createRoom('containment', 54, -28, 22, 18, {
-      north: [{ center: -2, width: 2.8 }],
-      west: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-    }, 0x141a22, hallwayTexture);
-    this.decorateContainmentAnnex(containmentAnnex.group);
-
-    const labAnnex = this.createRoom('labAnnex', 36, -28, 14, 12, {
-      east: [{ center: 0, width: 2.8 }],
-      north: [{ center: 0, width: 2.8 }],
-    }, 0x1d242e, hallwayTexture);
-    this.decorateLabAnnex(labAnnex.group);
-
-    // ==================== EXPANSION: STORAGE & SERVICE - CLEAN NON-OVERLAPPING ====================
-    // Moved to 20,-20 to avoid overlap with labAnnex (36,-28) - was overlapping 13x5
-    const storageWing = this.createRoom('storage', 20, -20, 16, 14, {
-      north: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-      west: [{ center: 0, width: 2.8 }],
-    }, 0x1e242c, hallwayTexture);
-    this.decorateStorage(storageWing.group);
-
-    // Moved to 44,8 to better connect maintHall (34,7) to maintenance (40,18)
-    const serviceCorridor1 = this.createRoom('service', 44, 8, 16, 4, {
-      west: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-    }, 0x1c2128, hallwayTexture);
-    this.decorateService(serviceCorridor1.group, 44, 8, 16, 4);
-
-    const serviceCorridor2 = this.createRoom('service', 50, 18, 4, 12, {
-      north: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-      east: [{ center: 2, width: 2.8 }],
-      west: [{ center: 0, width: 2.8 }],
-    }, 0x1c2128, hallwayTexture);
-    this.decorateService(serviceCorridor2.group, 50, 18, 4, 12);
-
-    // ==================== EXPANSION: GENERATOR COMPLEX - VOLT BOSS ARENA ====================
-    const maintenanceLowerCorridor = this.createRoom('maintenanceLower', 34, 28, 6, 8, {
-      north: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-    }, 0x1f262e, hallwayTexture);
-    this.decorateLinkHallway(maintenanceLowerCorridor.group, 34, 28, 6, 8, 20);
-
-    const maintenanceLower = this.createRoom('maintenanceLower', 34, 40, 20, 16, {
-      north: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-      south: [{ center: -4, width: 2.8 }],
-    }, 0x1e252e, hallwayTexture);
-    this.decorateMaintenanceLower(maintenanceLower.group);
-
-    const generatorHall = this.createRoom('generator', 48, 40, 10, 6, {
-      west: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-    }, 0x212a33, hallwayTexture);
-    this.decorateHallway(generatorHall.group, 48, 40, 10, 6, 21);
-
-    const generatorComplex = this.createRoom('generator', 62, 40, 20, 18, {
-      west: [{ center: 0, width: 2.8 }],
-      north: [{ center: 0, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-    }, 0x1c242e, hallwayTexture);
-    this.decorateGeneratorComplex(generatorComplex.group);
-
-    // ==================== EXPANSION: INDUSTRIAL SECTOR ====================
-    const industrialCorridor = this.createRoom('industrial', 84, 10, 10, 8, {
-      west: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-      north: [{ center: 0, width: 2.8 }],
-    }, 0x1d232b, hallwayTexture);
-    this.decorateLinkHallway(industrialCorridor.group, 84, 10, 10, 8, 22);
-
-    const industrialSector = this.createRoom('industrial', 96, 16, 22, 18, {
-      west: [{ center: -4, width: 2.8 }],
-      south: [{ center: 0, width: 2.8 }],
-      north: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-    }, 0x1a1f27, hallwayTexture);
-    this.decorateIndustrial(industrialSector.group);
-
-    // ==================== EXPANSION: OUTDOOR / INDUSTRIAL YARD ====================
-    const outdoorCorridor = this.createRoom('outdoor', 116, -6, 8, 10, {
-      west: [{ center: 0, width: 2.8 }],
-      east: [{ center: 0, width: 2.8 }],
-    }, 0x1a222a, hallwayTexture);
-    this.decorateLinkHallway(outdoorCorridor.group, 116, -6, 8, 10, 23);
-
-    const outdoorYard = this.createRoom('outdoor', 130, -6, 20, 20, {
-      west: [{ center: 0, width: 2.8 }],
-      north: [{ center: 0, width: 2.8 }],
-    }, 0x151a22, hallwayTexture);
-    this.decorateOutdoor(outdoorYard.group);
-
-    // ==================== SHOOTING RANGE - PRACTICE ARENA ====================
-    // Corridor connecting office area (6,22) to shooting range (10,45)
-    const shootingRangeCorridor = this.createRoom('shooting-range', 10, 33, 8, 12, {
-      north: [{ center: 0, width: 3.2 }],
-      south: [{ center: 0, width: 3.2 }],
-      west: [{ center: -2, width: 2.8 }],
-    }, 0x1a222c, hallwayTexture);
-    this.decorateLinkHallway(shootingRangeCorridor.group, 10, 33, 8, 12, 27);
-
-    const shootingRangeRoom = this.createRoom('shooting-range', 10, 45, 22, 24, {
-      south: [{ center: 0, width: 3.2 }],
-    }, 0x1a222c, hallwayTexture);
-    this.decorateShootingRange(shootingRangeRoom.group);
-    // Shooting range targets are now created in Game.ts to avoid circular import
-
-    // ==================== SECRET ROOMS - HIDDEN BUT REACHABLE - CLEAN PLACEMENT ====================
-    // Secret office: hidden door in west wall, disguised as cabinet - connects to office-main at 20,22
-    const secretOffice = this.createRoom('office', 30, 22, 6, 6, { west: [{ center: 0, width: 1.8 }] }, 0x1a1e24, hallwayTexture);
-    this.decorateSecretRoom(secretOffice.group, 'office');
-
-    // Secret medical: hidden behind loose panel in medical-bay east wall - at 14.5,-20 touches medicalBay at X=12
-    const secretMedical = this.createRoom('medical', 14.5, -20, 5, 5, { west: [{ center: 0, width: 1.8 }] }, 0x1a1e24, hallwayTexture);
-    this.decorateSecretRoom(secretMedical.group, 'medical');
-
-    // Secret maintenance: concealed access east of maintenance (40,18) - moved to 48,14 to avoid overlap
-    const secretMaintenance = this.createRoom('maintenance', 48, 14, 5, 5, { west: [{ center: 0, width: 1.8 }] }, 0x1a1e24, hallwayTexture);
-    this.decorateSecretRoom(secretMaintenance.group, 'maintenance');
-
-    // ==================== BOUNDARY WALLS & SAFETY ====================
-    this.createBoundaryWalls();
-
     this.createDoors();
     this.createInteractables();
-    // Ensure spawn area (1.5,0,2) is completely clear - no blocks, no clutter
-    this.clearSpawnArea();
     this.createNodes();
     this.createCameras();
     this.createTerminals();
@@ -1458,13 +1093,18 @@ export class Facility {
   }
 
   private decorateIntake(group: Group): void {
-    // ABSOLUTELY EMPTY SPAWN - 0,0,0 must be 100% clear, no objects at all
-    // Only wall decals and signs at extreme edges (±3.8) for atmosphere, nothing in center
-    // No pipes, no monitors, no debris, no furniture - completely empty
-    this.addGrungeDecal(group, -3.84, 1.4, 0, Math.PI / 2, 2, 1.5, 2);
-    this.addGrungeDecal(group, 3.84, 1.4, 0, -Math.PI / 2, 2, 1.5, 3);
-    // Only one sign far in corner, not blocking
-    this.addSign(group, 0, 1.9, -3.82, 0, 'suppression');
+    this.addBed(group, -2.1, -1.4, 0);
+    this.addCabinet(group, 2.4, -2.4, 'small');
+    this.addShelf(group, 2.7, 2.2, 1.6, 2.2);
+    this.addPipeRun(group, -3.7, -3.7, 7.4, true);
+    this.addWallMonitor(group, -1.8, 0.2, -3.88, Math.PI, 0x55a8ff);
+    this.addVent(group, 3.84, 2.4, -2, -Math.PI / 2);
+    this.addGrungeDecal(group, -3.84, 1.4, 1.2, Math.PI / 2, 3.4, 2.4, 2);
+    this.addGrungeDecal(group, 1.4, 1.3, -3.84, 0, 3.2, 2.4, 4);
+    this.addCable(group, -3.6, 3.2, -3.6, -3.6, 2.2, 0.5, 0.55);
+    this.addSign(group, 3.82, 1.9, 1.4, -Math.PI / 2, 'suppression');
+    this.addElectricalPanel(group, -3.76, 1.35, 3.2, Math.PI / 2);
+    this.addPropDebris(group, -1.5, 1.5, 6);
   }
 
   private decorateLobby(group: Group): void {
@@ -1672,459 +1312,6 @@ export class Facility {
     this.addBrokenEquipment(group, 73.5, 24.6, -2.2);
   }
 
-  // ==================== NEW EXPANSION DECORATIONS ====================
-
-  private decorateOffice(group: Group, centerX: number, centerZ: number, isMain: boolean): void {
-    if (isMain) {
-      this.addDesk(group, centerX - 3, centerZ - 4, 3.2);
-      this.addDesk(group, centerX + 2, centerZ - 4, 3.2);
-      this.addDesk(group, centerX - 3, centerZ + 2, 3.2);
-      this.addDesk(group, centerX + 2, centerZ + 2, 3.2);
-      this.addShelf(group, centerX + 8, centerZ + 5, 1.5, 2.2);
-      this.addCabinet(group, centerX - 8, centerZ - 6, 'small');
-      this.addWallMonitor(group, centerX - 2, centerZ + 0.5, centerZ - 7.9, 0, 0x6fd2ff);
-      this.addVent(group, centerX + 8.84, centerZ + 2.5, -3, -Math.PI / 2);
-      this.addSign(group, centerX + 0.5, 1.95, centerZ - 7.84, 0, 'suppression');
-      this.addGrungeDecal(group, centerX - 1.5, 1.3, centerZ - 7.84, 0, 4.2, 2.6, 33);
-      this.addElectricalPanel(group, centerX + 8.8, 1.4, centerZ + 2.2, -Math.PI / 2);
-      this.addCable(group, centerX - 8, 3.1, centerZ - 6.5, centerX + 8, 3.1, centerZ - 6.5, 0.5);
-      this.addPropDebris(group, centerX, centerZ + 6.7, 8);
-      this.addBrokenEquipment(group, centerX + 6.6, centerZ + 5.2, 0.9);
-      // Environmental storytelling - abandoned office
-      this.addDesk(group, centerX - 6, centerZ + 6, 2.2);
-    } else {
-      this.addDesk(group, centerX, centerZ, 2.8);
-      this.addSign(group, centerX + 0.6, 1.95, centerZ - 2.84, 0, 'exit');
-      this.addGrungeDecal(group, centerX - 1.8, 1.3, centerZ - 2.84, 0, 2.6, 2, 34);
-      this.addCable(group, centerX - 3, 3.1, centerZ + 2.5, centerX + 3, 3.1, centerZ + 2.5, 0.5);
-      this.addPipeRun(group, centerX, centerZ - 2.5 + 0.5, 6 * 0.8, true);
-    }
-  }
-
-  private decorateStorage(group: Group): void {
-    const center = group.position.clone();
-    // Storage racks and crates
-    this.addShelf(group, center.x + 2, center.z + 2, 1.6, 2.4);
-    this.addShelf(group, center.x - 2, center.z - 2, 1.6, 2.4);
-    this.addCabinet(group, center.x + 4, center.z - 3, 'large');
-    this.addCabinet(group, center.x - 4, center.z + 3, 'small');
-    this.addPropDebris(group, center.x, center.z, 12);
-    this.addSign(group, center.x, 1.9, center.z - 4.84, 0, 'caution');
-    this.addVent(group, center.x + 4.84, 2.5, center.z, -Math.PI / 2);
-    this.addGrungeDecal(group, center.x, 1.3, center.z - 4.84, 0, 4.2, 2.6, 35);
-    this.addElectricalPanel(group, center.x + 4.8, 1.4, center.z + 2.2, -Math.PI / 2);
-    this.addCable(group, center.x - 4, 3.1, center.z - 3.5, center.x + 4, 3.1, center.z - 3.5, 0.5);
-    this.addBrokenEquipment(group, center.x + 3, center.z + 3, 0.9);
-  }
-
-  private decorateAbandoned(group: Group): void {
-    this.addDesk(group, group.position.x + 1, group.position.z + 1, 2.2);
-    this.addBench(group, group.position.x - 2, group.position.z - 2, 3.2);
-    this.addShelf(group, group.position.x + 4, group.position.z + 2, 1.5, 2.2);
-    this.addWallMonitor(group, group.position.x, group.position.z + 0.5, group.position.z - 4.9, Math.PI, 0x6fd2ff);
-    this.addSign(group, group.position.x + 0.5, 1.95, group.position.z - 4.84, 0, 'exit');
-    this.addGrungeDecal(group, group.position.x - 1.5, 1.3, group.position.z - 4.84, 0, 4.2, 2.6, 36);
-    this.addPropDebris(group, group.position.x, group.position.z, 10);
-    this.addBrokenEquipment(group, group.position.x + 2, group.position.z + 2, 0.9);
-    // Employee area details
-    this.addPlantPot(group, group.position.x - 4, group.position.z - 3);
-    this.addBed(group, group.position.x + 3, group.position.z - 3, 0);
-  }
-
-  private decorateMedical(group: Group): void {
-    this.addBed(group, group.position.x - 2, group.position.z - 2, 0);
-    this.addBed(group, group.position.x + 2, group.position.z - 2, 0);
-    this.addDesk(group, group.position.x, group.position.z + 3, 3.2);
-    this.addShelf(group, group.position.x + 6, group.position.z + 2, 1.5, 2.2);
-    this.addCabinet(group, group.position.x - 6, group.position.z + 3, 'small');
-    this.addWallMonitor(group, group.position.x - 2, group.position.z + 0.5, group.position.z - 6.9, 0, 0x55a8ff);
-    this.addSign(group, group.position.x + 0.5, 1.95, group.position.z - 6.84, 0, 'caution');
-    this.addGrungeDecal(group, group.position.x - 1.5, 1.3, group.position.z - 6.84, 0, 4.2, 2.6, 37);
-    this.addElectricalPanel(group, group.position.x + 7.8, 1.4, group.position.z + 2.2, -Math.PI / 2);
-    this.addCable(group, group.position.x - 6, 3.1, group.position.z - 5.5, group.position.x + 6, 3.1, group.position.z - 5.5, 0.5);
-    this.addPropDebris(group, group.position.x, group.position.z, 8);
-    this.addVent(group, group.position.x + 7.84, 2.5, group.position.z, -Math.PI / 2);
-  }
-
-  private decorateCheckpoint(group: Group): void {
-    this.addDesk(group, group.position.x, group.position.z, 3.2);
-    this.addLocker(group, group.position.x - 3, group.position.z - 2, 2);
-    this.addWallMonitor(group, group.position.x + 0.5, group.position.z + 0.5, group.position.z - 4.9, 0, 0x87d1ff);
-    this.addSign(group, group.position.x + 0.5, 1.95, group.position.z - 4.84, 0, 'highVoltage');
-    this.addGrungeDecal(group, group.position.x - 1.5, 1.3, group.position.z - 4.84, 0, 4.2, 2.6, 38);
-    this.addElectricalPanel(group, group.position.x + 4.8, 1.4, group.position.z + 2.2, -Math.PI / 2);
-    this.addElectricalPanel(group, group.position.x - 4.8, 1.4, group.position.z - 2.2, Math.PI / 2);
-    this.addCable(group, group.position.x - 4, 3.1, group.position.z - 3.5, group.position.x + 4, 3.1, group.position.z - 3.5, 0.5);
-    this.addFan(group, group.position.x, group.position.z + 3);
-    this.addPropDebris(group, group.position.x, group.position.z, 6);
-  }
-
-  private decorateContainmentAnnex(group: Group): void {
-    // Boss arena - large containment lab with multiple routes and cover
-    this.addContainmentFrame(group, group.position.x - 4, group.position.z - 3);
-    this.addContainmentFrame(group, group.position.x + 4, group.position.z - 3);
-    this.addContainmentFrame(group, group.position.x - 4, group.position.z + 3);
-    this.addContainmentFrame(group, group.position.x + 4, group.position.z + 3);
-    this.addLabBench(group, group.position.x - 6, group.position.z);
-    this.addLabBench(group, group.position.x + 6, group.position.z);
-    this.addDesk(group, group.position.x, group.position.z - 6, 4.2);
-    this.addShelf(group, group.position.x + 8, group.position.z + 6, 1.6, 2.4);
-    this.addLocker(group, group.position.x - 9, group.position.z - 6, 2);
-    this.addWallMonitor(group, group.position.x, group.position.z + 0.5, group.position.z - 8.9, 0, 0x5cc4ff);
-    this.addFan(group, group.position.x + 8, group.position.z);
-    this.addVent(group, group.position.x - 10, 2.6, group.position.z - 8.84, 0);
-    this.addVent(group, group.position.x + 10, 2.6, group.position.z + 8.84, Math.PI);
-    this.addSign(group, group.position.x, 2.15, group.position.z - 8.84, 0, 'radiation');
-    this.addSign(group, group.position.x - 9, 1.9, group.position.z, Math.PI / 2, 'caution');
-    this.addElectricalPanel(group, group.position.x - 10.76, 1.4, group.position.z, Math.PI / 2);
-    this.addElectricalPanel(group, group.position.x + 10.76, 1.4, group.position.z, -Math.PI / 2);
-    this.addGrungeDecal(group, group.position.x, 1.2, group.position.z - 8.84, 0, 6, 3, 39);
-    this.addCable(group, group.position.x - 8, 3.2, group.position.z - 7.5, group.position.x + 8, 3.1, group.position.z - 7.5, 0.6);
-    this.addBrokenEquipment(group, group.position.x + 8, group.position.z - 6, 1.8);
-    this.addPropDebris(group, group.position.x, group.position.z, 14);
-    // Cover for boss fight
-    this.addCabinet(group, group.position.x - 2, group.position.z + 4, 'large');
-    this.addCabinet(group, group.position.x + 2, group.position.z - 4, 'large');
-    // Interactive machinery for boss mechanics
-    this.addGenerator(group, group.position.x - 7, group.position.z + 5);
-    this.addGenerator(group, group.position.x + 7, group.position.z + 5);
-  }
-
-  private decorateLabAnnex(group: Group): void {
-    this.addLabBench(group, group.position.x - 2, group.position.z - 2);
-    this.addLabBench(group, group.position.x + 2, group.position.z + 2);
-    this.addDesk(group, group.position.x, group.position.z, 3.2);
-    this.addShelf(group, group.position.x + 5, group.position.z + 3, 1.5, 2.2);
-    this.addWallMonitor(group, group.position.x, group.position.z + 0.5, group.position.z - 5.9, 0, 0x5cc4ff);
-    this.addSign(group, group.position.x, 2.15, group.position.z - 5.84, 0, 'radiation');
-    this.addGrungeDecal(group, group.position.x, 1.2, group.position.z - 5.84, 0, 4, 2.4, 40);
-    this.addElectricalPanel(group, group.position.x - 6.76, 1.4, group.position.z, Math.PI / 2);
-    this.addCable(group, group.position.x - 5, 3.2, group.position.z - 4.5, group.position.x + 5, 3.1, group.position.z - 4.5, 0.6);
-    this.addPropDebris(group, group.position.x, group.position.z, 8);
-  }
-
-  private decorateService(group: Group, centerX: number, centerZ: number, width: number, depth: number): void {
-    this.addPipeRun(group, centerX, centerZ - depth / 2 + 0.5, width * 0.8, true);
-    this.addPipeRun(group, centerX - width / 2 + 0.5, centerZ, depth * 0.8, false);
-    this.addVent(group, centerX - 1.4, 2.6, centerZ - depth / 2 + 0.16, 0);
-    this.addGrungeDecal(group, centerX - 1.8, 1.3, centerZ - depth / 2 + 0.16, 0, 2.6, 2, 41);
-    this.addCable(group, centerX - width / 2 + 0.5, 3.1, centerZ + depth / 2 - 0.5, centerX + width / 2 - 0.5, 3.1, centerZ + depth / 2 - 0.5, 0.5);
-    this.addSign(group, centerX + 0.6, 1.95, centerZ - depth / 2 + 0.16, 0, 'caution');
-    this.addElectricalPanel(group, centerX + width / 2 - 0.24, 1.4, centerZ, -Math.PI / 2);
-    this.addPropDebris(group, centerX, centerZ, 6);
-  }
-
-  private decorateMaintenanceLower(group: Group): void {
-    this.addGenerator(group, group.position.x - 4, group.position.z - 2);
-    this.addGenerator(group, group.position.x + 4, group.position.z - 2);
-    this.addPipeRun(group, group.position.x, group.position.z - 6, 14, false);
-    this.addPipeRun(group, group.position.x + 6, group.position.z - 6, 14, false);
-    this.addFan(group, group.position.x - 3, group.position.z + 5);
-    this.addFan(group, group.position.x + 3, group.position.z + 5);
-    this.addCabinet(group, group.position.x + 8, group.position.z, 'large');
-    this.addToolCart(group, group.position.x - 6, group.position.z);
-    this.addPropDebris(group, group.position.x, group.position.z, 10);
-    this.addElectricalPanel(group, group.position.x - 9.76, 1.4, group.position.z, Math.PI / 2);
-    this.addElectricalPanel(group, group.position.x + 9.76, 1.4, group.position.z, -Math.PI / 2);
-    this.addSign(group, group.position.x, 2.2, group.position.z + 7.84, Math.PI, 'highVoltage');
-    this.addVent(group, group.position.x - 8, 2.6, group.position.z + 7.84, Math.PI);
-    this.addGrungeDecal(group, group.position.x - 9.84, 1.3, group.position.z, Math.PI / 2, 4, 2.6, 42);
-    this.addCable(group, group.position.x - 8, 3.15, group.position.z, group.position.x + 8, 3.15, group.position.z, 0.7);
-    this.addBrokenEquipment(group, group.position.x + 6, group.position.z + 4, -0.6);
-  }
-
-  private decorateGeneratorComplex(group: Group): void {
-    // Volt boss arena - electricity manipulation
-    this.addGenerator(group, group.position.x - 5, group.position.z - 4);
-    this.addGenerator(group, group.position.x + 5, group.position.z - 4);
-    this.addGenerator(group, group.position.x - 5, group.position.z + 4);
-    this.addGenerator(group, group.position.x + 5, group.position.z + 4);
-    this.addPipeRun(group, group.position.x, group.position.z - 8, 18, false);
-    this.addPipeRun(group, group.position.x + 8, group.position.z - 8, 18, false);
-    this.addFan(group, group.position.x, group.position.z);
-    this.addCabinet(group, group.position.x, group.position.z - 7, 'large');
-    this.addToolCart(group, group.position.x - 7, group.position.z);
-    this.addPropDebris(group, group.position.x, group.position.z, 12);
-    this.addElectricalPanel(group, group.position.x - 9.76, 1.4, group.position.z + 2, Math.PI / 2);
-    this.addElectricalPanel(group, group.position.x + 9.76, 1.4, group.position.z - 2, -Math.PI / 2);
-    this.addElectricalPanel(group, group.position.x, 1.4, group.position.z + 8.76, Math.PI);
-    this.addSign(group, group.position.x, 2.2, group.position.z + 8.84, Math.PI, 'highVoltage');
-    this.addSign(group, group.position.x - 9, 1.8, group.position.z, Math.PI / 2, 'caution');
-    this.addVent(group, group.position.x + 9, 2.6, group.position.z, -Math.PI / 2);
-    this.addGrungeDecal(group, group.position.x - 9.84, 1.3, group.position.z, Math.PI / 2, 4, 2.6, 43);
-    this.addGrungeDecal(group, group.position.x, 1.4, group.position.z + 8.84, Math.PI, 5, 3, 44);
-    this.addCable(group, group.position.x - 8, 3.15, group.position.z - 6, group.position.x + 8, 3.15, group.position.z + 6, 0.9);
-    this.addBrokenEquipment(group, group.position.x + 6, group.position.z + 6, -0.6);
-    this.addBrokenEquipment(group, group.position.x - 6, group.position.z - 6, 2.4);
-    // Cover and interactive elements for boss fight
-    this.addCabinet(group, group.position.x - 3, group.position.z + 2, 'large');
-    this.addCabinet(group, group.position.x + 3, group.position.z - 2, 'large');
-  }
-
-  private decorateIndustrial(group: Group): void {
-    this.addGenerator(group, group.position.x - 6, group.position.z - 4);
-    this.addGenerator(group, group.position.x + 6, group.position.z - 4);
-    this.addPipeRun(group, group.position.x - 10, group.position.z, 18, true);
-    this.addPipeRun(group, group.position.x, group.position.z - 8, 16, false);
-    this.addFan(group, group.position.x - 4, group.position.z + 4);
-    this.addFan(group, group.position.x + 4, group.position.z + 4);
-    this.addCabinet(group, group.position.x + 8, group.position.z, 'large');
-    this.addShelf(group, group.position.x - 8, group.position.z + 4, 1.6, 2.4);
-    this.addPropDebris(group, group.position.x, group.position.z, 14);
-    this.addElectricalPanel(group, group.position.x - 10.76, 1.4, group.position.z, Math.PI / 2);
-    this.addElectricalPanel(group, group.position.x + 10.76, 1.4, group.position.z, -Math.PI / 2);
-    this.addSign(group, group.position.x, 2.2, group.position.z + 8.84, Math.PI, 'highVoltage');
-    this.addVent(group, group.position.x, 2.6, group.position.z + 8.84, Math.PI);
-    this.addGrungeDecal(group, group.position.x - 10.84, 1.3, group.position.z, Math.PI / 2, 4, 2.6, 45);
-    this.addCable(group, group.position.x - 8, 3.15, group.position.z, group.position.x + 8, 3.15, group.position.z, 0.7);
-    this.addBrokenEquipment(group, group.position.x + 6, group.position.z + 4, -0.6);
-    this.addFloodPlane(group, group.position.x, group.position.z + 6, 10, 6);
-  }
-
-  private decorateOutdoor(group: Group): void {
-    // Outdoor industrial yard with fences as natural boundaries
-    this.addPipeRun(group, group.position.x, group.position.z - 8, 18, true);
-    this.addGenerator(group, group.position.x - 4, group.position.z - 4);
-    this.addCabinet(group, group.position.x + 6, group.position.z, 'large');
-    this.addShelf(group, group.position.x - 6, group.position.z + 4, 1.6, 2.4);
-    this.addPropDebris(group, group.position.x, group.position.z, 16);
-    this.addSign(group, group.position.x, 2.2, group.position.z + 9.84, Math.PI, 'caution');
-    this.addVent(group, group.position.x, 2.6, group.position.z + 9.84, Math.PI);
-    this.addGrungeDecal(group, group.position.x - 9.84, 1.3, group.position.z, Math.PI / 2, 5, 3, 46);
-    this.addCable(group, group.position.x - 8, 3.15, group.position.z, group.position.x + 8, 3.15, group.position.z, 0.7);
-    // Fence as natural barrier
-    this.addFence(group, group.position.x, group.position.z + 10, 20, 0.5);
-    this.addFence(group, group.position.x + 10, group.position.z, 0.5, 20);
-    this.addFence(group, group.position.x, group.position.z - 10, 20, 0.5);
-  }
-
-  private decorateShootingRange(group: Group): void {
-    // Clean, professional shooting range - minimal clutter, focused on targets
-    // South entrance, north targets
-    this.addSign(group, group.position.x, 2.2, group.position.z + 11.84, Math.PI, 'caution');
-    this.addSign(group, group.position.x, 1.8, group.position.z - 11.84, 0, 'suppression');
-    this.addElectricalPanel(group, group.position.x - 10.76, 1.4, group.position.z + 8, Math.PI / 2);
-    this.addElectricalPanel(group, group.position.x + 10.76, 1.4, group.position.z + 8, -Math.PI / 2);
-    this.addGrungeDecal(group, group.position.x - 10.84, 1.4, group.position.z, Math.PI / 2, 6, 3, 52);
-    this.addGrungeDecal(group, group.position.x + 10.84, 1.4, group.position.z, -Math.PI / 2, 6, 3, 53);
-    // Weapon rack on side wall
-    this.addShelf(group, group.position.x - 8, group.position.z + 8, 1.6, 1.2);
-    this.addCabinet(group, group.position.x + 8, group.position.z + 8, 'small');
-    // Ammo crates
-    this.addPropDebris(group, group.position.x - 6, group.position.z + 9, 4);
-    this.addPropDebris(group, group.position.x + 6, group.position.z + 9, 4);
-  }
-
-  private decorateSecretRoom(group: Group, type: string): void {
-    this.addShelf(group, group.position.x, group.position.z, 1.5, 2.2);
-    this.addCabinet(group, group.position.x + 1, group.position.z + 1, 'small');
-    this.addPropDebris(group, group.position.x, group.position.z, 4);
-    this.addSign(group, group.position.x, 1.9, group.position.z - 2.5, 0, 'suppression');
-    this.addGrungeDecal(group, group.position.x, 1.3, group.position.z - 2.5, 0, 3, 2, 47);
-    if (type === 'office') {
-      this.addDesk(group, group.position.x, group.position.z, 2.2);
-    }
-  }
-
-  private addFence(group: Group, x: number, z: number, width: number, depth: number): void {
-    const material = new MeshStandardMaterial({ color: 0x3a4048, roughness: 0.8, metalness: 0.6 });
-    const fence = new Mesh(new BoxGeometry(width, 2.5, depth), material);
-    fence.position.set(x, 1.25, z);
-    fence.castShadow = true;
-    fence.receiveShadow = true;
-    group.add(fence);
-    this.colliders.push({
-      id: `fence-${x}-${z}`,
-      box: new Box3().setFromObject(fence),
-      enabled: true,
-      tag: 'wall',
-    });
-  }
-
-  private createBoundaryWalls(): void {
-    // Create physical boundary walls - no escape possible via jumping, climbing, or corner exploits
-    // Using environmental geometry where possible, physical colliders where natural geometry insufficient
-    const bounds = [
-      // North boundary - concrete wall
-      { min: new Vector3(-15, 0, -55), max: new Vector3(152, 6, -52), id: 'boundary-north' },
-      // South boundary - concrete wall
-      { min: new Vector3(-15, 0, 52), max: new Vector3(152, 6, 55), id: 'boundary-south' },
-      // West boundary - concrete wall
-      { min: new Vector3(-15, 0, -55), max: new Vector3(-12, 6, 55), id: 'boundary-west' },
-      // East boundary - extended for outdoor yard at 130,-6 20x20 (ends at 140) - fence + wall
-      { min: new Vector3(145, 0, -55), max: new Vector3(152, 6, 55), id: 'boundary-east' },
-      // Ceiling - prevent jumping over walls (jump velocity 5.8, gravity 18.5, max height ~4.5m)
-      { min: new Vector3(-15, 4.5, -55), max: new Vector3(152, 8, 55), id: 'boundary-ceiling' },
-      // Floor safety below - void protection
-      { min: new Vector3(-15, -8, -55), max: new Vector3(152, -0.2, 55), id: 'boundary-floor-safety' },
-      // Outdoor yard physical fence barriers - prevent escape around yard
-      { min: new Vector3(139, 0, -17), max: new Vector3(141, 3.5, 5), id: 'outdoor-fence-east' },
-      { min: new Vector3(120, 0, 4), max: new Vector3(141, 3.5, 5.5), id: 'outdoor-fence-north' },
-      { min: new Vector3(120, 0, -17), max: new Vector3(141, 3.5, -15.5), id: 'outdoor-fence-south' },
-      // Corner reinforcements - prevent corner exploits
-      { min: new Vector3(-15, 0, -55), max: new Vector3(-12, 6, -52), id: 'corner-nw' },
-      { min: new Vector3(145, 0, -55), max: new Vector3(152, 6, -52), id: 'corner-ne' },
-      { min: new Vector3(-15, 0, 52), max: new Vector3(-12, 6, 55), id: 'corner-sw' },
-      { min: new Vector3(145, 0, 52), max: new Vector3(152, 6, 55), id: 'corner-se' },
-    ];
-
-    for (const bound of bounds) {
-      if (bound.id === 'boundary-floor-safety') continue;
-      this.colliders.push({
-        id: bound.id,
-        box: new Box3(bound.min, bound.max),
-        enabled: true,
-        tag: 'boundary',
-      });
-    }
-
-    // Update world bounds to match - expanded for outdoor and safety
-    this.worldBoundsMin.set(-12, -2, -52);
-    this.worldBoundsMax.set(150, 6, 52);
-  }
-
-  private clearSpawnArea(): void {
-    // Ensure player spawn at 0,0,0 is COMPLETELY clear - 4.5m radius, no blocks, no meshes, nothing
-    const spawnX = 0;
-    const spawnZ = 0;
-    const clearRadius = 4.5;
-    const clearRadiusSq = clearRadius * clearRadius;
-    
-    // Remove colliders
-    const collidersToKeep = this.colliders.filter(collider => {
-      if (collider.tag === 'boundary') return true;
-      const box = collider.box;
-      const centerX = (box.min.x + box.max.x) * 0.5;
-      const centerZ = (box.min.z + box.max.z) * 0.5;
-      const dx = centerX - spawnX;
-      const dz = centerZ - spawnZ;
-      const distSq = dx * dx + dz * dz;
-      if (distSq < clearRadiusSq) {
-        // Keep only intake edge walls at exactly ±4
-        const isIntakeEdgeWall = (Math.abs(Math.abs(centerX) - 4) < 0.65 && Math.abs(centerZ) < 4.6) || 
-                                  (Math.abs(Math.abs(centerZ) - 4) < 0.65 && Math.abs(centerX) < 4.6);
-        if (collider.tag === 'wall' && isIntakeEdgeWall) {
-          return true;
-        }
-        return false;
-      }
-      return true;
-    });
-    this.colliders.length = 0;
-    this.colliders.push(...collidersToKeep);
-
-    // Remove interactables
-    const interactablesToKeep: typeof this.interactables = [];
-    for (const interactable of this.interactables) {
-      const pos = interactable.object.position;
-      const dx = pos.x - spawnX;
-      const dz = pos.z - spawnZ;
-      const distSq = dx * dx + dz * dz;
-      if (distSq < clearRadiusSq) {
-        if (interactable.id === 'flashlight') {
-          // Move flashlight to edge of clear area
-          interactable.object.position.set(2.8, 0.5, 1.8);
-          interactablesToKeep.push(interactable);
-          continue;
-        }
-        // Remove all other interactables within 4.5m
-        this.root.remove(interactable.object);
-        continue;
-      }
-      interactablesToKeep.push(interactable);
-    }
-    this.interactables.length = 0;
-    this.interactables.push(...interactablesToKeep);
-
-    // AGGRESSIVE MESH REMOVAL: remove ANY mesh within 4.5m that is not floor, ceiling, or wall
-    const meshesToRemove: Object3D[] = [];
-    this.root.traverse((obj) => {
-      if (obj === this.root) return;
-      // Only check meshes and groups that are direct props (not lights, not floor)
-      if ((obj as Mesh).isMesh) {
-        const mesh = obj as Mesh;
-        // Skip floor (y ~0 and large plane), ceiling, and wall meshes that are at ±4
-        // Get world position
-        const worldPos = new Vector3();
-        mesh.getWorldPosition(worldPos);
-        const dx = worldPos.x - spawnX;
-        const dz = worldPos.z - spawnZ;
-        const distSq = dx * dx + dz * dz;
-        if (distSq < clearRadiusSq) {
-          // Check if it's a wall at edge (±4) - keep those
-          const isEdgeWall = (Math.abs(Math.abs(worldPos.x) - 4) < 0.7 && Math.abs(worldPos.z) < 4.6) ||
-                             (Math.abs(Math.abs(worldPos.z) - 4) < 0.7 && Math.abs(worldPos.x) < 4.6);
-          // Check if it's floor (y < 0.2 and large)
-          const isFloor = worldPos.y < 0.3 && (mesh.geometry.type.includes('Plane') || mesh.geometry.type.includes('Box'));
-          // Keep floor and edge walls, remove everything else
-          if (!isEdgeWall && worldPos.y > 0.15 && worldPos.y < 3) {
-            // Additional check: if it's part of floor group (y low), keep it
-            // But if it's a prop like shelf, cabinet, desk, debris, etc, remove
-            const isProbablyProp = mesh.geometry.type === 'BoxGeometry' || 
-                                   mesh.geometry.type === 'CylinderGeometry' ||
-                                   mesh.name.includes('shelf') ||
-                                   mesh.name.includes('cabinet') ||
-                                   mesh.name.includes('desk') ||
-                                   worldPos.y > 0.2;
-            if (isProbablyProp && !isFloor) {
-              // Check if parent is intake group (at 0,0) - if so, definitely remove unless it's wall
-              meshesToRemove.push(mesh);
-            }
-          }
-        }
-      }
-      // Also check InstancedMesh (debris)
-      if ((obj as any).isInstancedMesh) {
-        const worldPos = new Vector3();
-        obj.getWorldPosition(worldPos);
-        const dx = worldPos.x - spawnX;
-        const dz = worldPos.z - spawnZ;
-        const distSq = dx * dx + dz * dz;
-        if (distSq < clearRadiusSq && worldPos.y < 1) {
-          meshesToRemove.push(obj);
-        }
-      }
-    });
-
-    // Remove collected meshes
-    for (const mesh of meshesToRemove) {
-      if (mesh.parent) {
-        mesh.parent.remove(mesh);
-      }
-    }
-
-    // EXTRA: directly clear intake room group (the room at 0,0) of all non-wall children
-    // Find intake room by checking all groups in root
-    for (const child of this.root.children) {
-      if (child instanceof Group) {
-        const pos = child.position;
-        // Intake is at 0,0
-        if (Math.abs(pos.x) < 1 && Math.abs(pos.z) < 1) {
-          const intakeChildrenToRemove: Object3D[] = [];
-          for (const sub of child.children) {
-            // Keep only walls, floor, ceiling - remove everything else
-            // Walls are typically BoxGeometry at edges, floor is Plane or large Box at y=0
-            if ((sub as Mesh).isMesh) {
-              const mesh = sub as Mesh;
-              const localPos = mesh.position;
-              // If mesh is at center (within 3m) and not floor, remove
-              const distFromCenter = Math.sqrt(localPos.x * localPos.x + localPos.z * localPos.z);
-              if (distFromCenter < 3.5 && mesh.position.y > 0.2) {
-                intakeChildrenToRemove.push(mesh);
-              }
-            }
-            if ((sub as any).isInstancedMesh) {
-              intakeChildrenToRemove.push(sub);
-            }
-          }
-          for (const r of intakeChildrenToRemove) {
-            child.remove(r);
-          }
-        }
-      }
-    }
-  }
-
   /** Wall-mounted emergency charger that tops the flashlight cell back up. */
   private makeCharger(id: string, x: number, z: number, rotationY: number): SwitchInteractable {
     const group = new Group();
@@ -2165,30 +1352,6 @@ export class Facility {
       this.addDoor('door-level3', 74, 13, 'south', { locked: true, keycardId: 'keycard-level-3', heavy: true }),
       this.addDoor('door-underground', 64, -6, 'east', { locked: true, heavy: true, strange: true }),
       this.addDoor('door-core', 95, -6, 'east', { locked: true, keycardId: 'keycard-level-3', heavy: true }),
-      // Expansion doors
-      this.addDoor('door-lobby-office', 20, 8, 'south', { heavy: true }),
-      this.addDoor('door-office-main', 20, 14, 'south', { locked: true, keycardId: 'keycard-office' }),
-      this.addDoor('door-office-storage', 12, 20, 'east', {}),
-      this.addDoor('door-breakroom', 12, 10, 'east', {}),
-      this.addDoor('door-medical-hall', 7, -8, 'east', {}),
-      this.addDoor('door-medical-main', 8, -10, 'east', { locked: true, keycardId: 'keycard-medical' }),
-      this.addDoor('door-medical-storage', 4, -21, 'south', { heavy: true }),
-      this.addDoor('door-checkpoint-west', 24, 0, 'east', { heavy: true }),
-      this.addDoor('door-checkpoint-east', 34, 0, 'east', { heavy: true }),
-      this.addDoor('door-containment', 48, -12, 'south', { locked: true, keycardId: 'keycard-containment', heavy: true }),
-      this.addDoor('door-labAnnex', 43, -28, 'east', {}),
-      this.addDoor('door-storage-wing', 34, -13, 'south', { heavy: true }),
-      this.addDoor('door-service-1', 42, 8, 'east', {}),
-      this.addDoor('door-service-2', 50, 12, 'south', {}),
-      this.addDoor('door-maintenance-lower', 34, 24, 'south', { locked: true, keycardId: 'keycard-maintenance-lower', heavy: true }),
-      this.addDoor('door-generator-hall', 43, 40, 'east', { heavy: true }),
-      this.addDoor('door-generator-complex', 52, 40, 'east', { locked: true, requiresPower: true, heavy: true }),
-      this.addDoor('door-industrial-corridor', 79, 10, 'east', {}),
-      this.addDoor('door-industrial-main', 85, 12, 'east', { heavy: true }),
-      this.addDoor('door-outdoor', 112, -6, 'east', { locked: true, keycardId: 'keycard-level-3', heavy: true }),
-      this.addDoor('door-level2-north', 20, -41, 'south', { locked: true, keycardId: 'keycard-office' }),
-      this.addDoor('door-l3-south', 74, 32, 'south', { heavy: true }),
-      this.addDoor('door-l3-east', 83, 27, 'east', { heavy: true }),
     );
   }
 
@@ -2406,234 +1569,6 @@ export class Facility {
     const coreSwitch2 = this.makeCoreSwitch('core-switch-2', 104.0, 1.2, -12.2, 1, 1);
     const coreSwitch3 = this.makeCoreSwitch('core-switch-3', 108.4, 1.2, -9.8, 2, 2);
 
-    // ==================== EXPANSION INTERACTABLES ====================
-    // Office wing
-    const officeKeycard = this.makePickup('pickup-keycard-office', this.createPickupMesh(6, 0.76, 10, 0x8ec6ff, 'keycard'), {
-      id: 'keycard-office',
-      name: 'OFFICE KEYCARD',
-      type: 'keycard',
-      description: 'Access: Office Wing, Medical Storage, Observation Deck North. Found in break room.',
-      quantity: 1,
-    }, (game) => {
-      game.puzzles.officeDoorUnlocked = true;
-      game.progress.officeUnlocked = true;
-      game.facility.applyProgress(game.progress, game.puzzles);
-      game.setObjective('reachMedical');
-    });
-
-    const medicalKeycard = this.makePickup('pickup-keycard-medical', this.createPickupMesh(6, 0.76, 20, 0x77c3a8, 'keycard'), {
-      id: 'keycard-medical',
-      name: 'MEDICAL KEYCARD',
-      type: 'keycard',
-      description: 'Access: Medical Bay, Emergency Storage. Required for medical supplies.',
-      quantity: 1,
-    }, (game) => {
-      game.puzzles.medicalKeycardFound = true;
-      game.progress.medicalUnlocked = true;
-      game.facility.applyProgress(game.progress, game.puzzles);
-    });
-
-    const containmentKeycard = this.makePickup('pickup-keycard-containment', this.createPickupMesh(20, 0.76, 22, 0xff8e8e, 'keycard'), {
-      id: 'keycard-containment',
-      name: 'CONTAINMENT KEYCARD',
-      type: 'keycard',
-      description: 'Access: Containment Annex - BEHEMOTH CONTAINMENT. Extreme caution required.',
-      quantity: 1,
-    });
-
-    const maintenanceLowerKeycard = this.makePickup('pickup-keycard-maint-lower', this.createPickupMesh(29, 0.76, 2, 0xc3a877, 'keycard'), {
-      id: 'keycard-maintenance-lower',
-      name: 'LOWER MAINTENANCE KEYCARD',
-      type: 'keycard',
-      description: 'Access: Lower Maintenance, Generator Complex. Heavy machinery area.',
-      quantity: 1,
-    });
-
-    const batteryOffice = this.makePickup('pickup-battery-office', this.createPickupMesh(22, 0.72, 22, 0xc4b36a, 'battery'), {
-      id: 'battery-office',
-      name: 'OFFICE BATTERY',
-      type: 'battery',
-      description: 'Battery from office emergency kit.',
-      quantity: 1,
-    }, (game) => game.player.addBattery(35));
-
-    const batteryMedical = this.makePickup('pickup-battery-medical', this.createPickupMesh(4, 0.72, -14, 0xc4b36a, 'battery'), {
-      id: 'battery-medical',
-      name: 'MEDICAL BATTERY',
-      type: 'battery',
-      description: 'Sterilized battery from medical bay.',
-      quantity: 1,
-    }, (game) => game.player.addBattery(35));
-
-    const batteryGenerator = this.makePickup('pickup-battery-generator', this.createPickupMesh(62, 0.72, 38, 0xc4b36a, 'battery'), {
-      id: 'battery-generator',
-      name: 'GENERATOR BATTERY',
-      type: 'battery',
-      description: 'High-capacity battery from generator complex.',
-      quantity: 1,
-    }, (game) => game.player.addBattery(40));
-
-    const medkit2 = this.makePickup('pickup-med-2', this.createPickupMesh(4, 0.72, -16, 0xa93434, 'medkit'), {
-      id: 'med-supply-2',
-      name: 'MEDICAL KIT',
-      type: 'medical',
-      description: 'Advanced medical supplies from medical bay.',
-      quantity: 1,
-    }, (game) => game.player.heal(60));
-
-    const medkit3 = this.makePickup('pickup-med-3', this.createPickupMesh(34, 0.72, 42, 0xa93434, 'medkit'), {
-      id: 'med-supply-3',
-      name: 'TRAUMA KIT',
-      type: 'medical',
-      description: 'Trauma kit from lower maintenance.',
-      quantity: 1,
-    }, (game) => game.player.heal(50));
-
-    // Documents for lore and exploration
-    const officeMemo = this.makeDocument('doc-office', this.createDocumentMesh(18, 0.78, 18), 'OFFICE INCIDENT LOG', 'Office staff reported:\n- Lights flickering in containment annex\n- Strange noises from generator complex\n- Medical bay quarantine after staff injuries\n- Security checkpoint power fluctuations\n- Recommendation: avoid containment annex after 22:00', {
-      id: 'doc-office-log',
-      name: 'OFFICE INCIDENT LOG',
-      type: 'document',
-      description: 'Office incident log with staff reports.',
-      quantity: 1,
-    });
-
-    const medicalReport = this.makeDocument('doc-medical', this.createDocumentMesh(2, 0.78, -12), 'MEDICAL EMERGENCY REPORT', 'Medical emergency:\n- 3 staff with lacerations from containment breach\n- 2 staff with electrical burns from generator complex\n- 1 staff psychological break near core\n- All incidents connected to suppression field fluctuations\n- Containment Annex sealed until further notice', {
-      id: 'doc-medical-report',
-      name: 'MEDICAL EMERGENCY REPORT',
-      type: 'document',
-      description: 'Medical emergency report with injury details.',
-      quantity: 1,
-    });
-
-    const containmentLog = this.makeDocument('doc-containment', this.createDocumentMesh(54, 0.78, -26), 'BEHEMOTH CONTAINMENT LOG', 'Behemoth containment:\n- Mass: 400kg, Height: 2.8m\n- Origin: Containment Chamber 4 residue\n- Behavior: Hunts via sound, vulnerable to light\n- Protocol: DO NOT ENGAGE - SURVIVAL AND ESCAPE ONLY\n- Arena: Multiple routes, cover, generators\n- Weakness: Requires generator activation and power redirect\n- Escape: Security door opens after purge', {
-      id: 'doc-containment-log',
-      name: 'BEHEMOTH CONTAINMENT LOG',
-      type: 'document',
-      description: 'Behemoth containment log with survival protocol.',
-      quantity: 1,
-    });
-
-    const generatorLog = this.makeDocument('doc-generator', this.createDocumentMesh(62, 0.78, 42), 'VOLT ENTITY ANALYSIS', 'Volt entity:\n- Electromagnetic manifestation from generator overload\n- Manipulates electricity, causes blackouts\n- Hunts in darkness, slowed by light\n- Protocol: Restore 3 generator switches\n- Avoid entity while restoring power\n- Electrical hazards during encounter\n- Escape via industrial sector', {
-      id: 'doc-generator-log',
-      name: 'VOLT ENTITY ANALYSIS',
-      type: 'document',
-      description: 'Volt entity analysis with countermeasures.',
-      quantity: 1,
-    });
-
-    const industrialMemo = this.makeDocument('doc-industrial', this.createDocumentMesh(96, 0.78, 16), 'INDUSTRIAL SECTOR LOG', 'Industrial sector:\n- Connects lower maintenance to outdoor yard\n- Heavy machinery still active\n- Emergency exit via outdoor gate\n- Requires Level 3 keycard\n- Outdoor yard has fence boundaries to prevent escape\n- Generator complex powers this sector', {
-      id: 'doc-industrial-log',
-      name: 'INDUSTRIAL SECTOR LOG',
-      type: 'document',
-      description: 'Industrial sector log with exit information.',
-      quantity: 1,
-    });
-
-    const secretOfficeDoc = this.makeDocument('doc-secret-office', this.createDocumentMesh(30, 0.78, 20), 'HIDDEN RESEARCH NOTES', 'Hidden notes found in secret office:\n- Suppression field not containing entity, but separating realities\n- Chamber 4 residue is conscious\n- Behemoth is residue given form\n- Volt is electromagnetic echo\n- Core entity is the field itself becoming aware\n- All connected to Suppression Event\n- Evidence for outside world', {
-      id: 'doc-secret-office',
-      name: 'HIDDEN RESEARCH NOTES',
-      type: 'document',
-      description: 'Hidden research notes revealing truth.',
-      quantity: 1,
-    });
-
-    const secretMedicalDoc = this.makeDocument('doc-secret-medical', this.createDocumentMesh(14.5, 0.78, -20), 'QUARANTINE RECORDS', 'Quarantine records:\n- Staff hearing own voices over sealed radios\n- Seeing figures that vanish when looked at directly\n- Electrical burns with no source\n- Containment breach not accidental - experiment\n- Pixel Craft LLC approved the Suppression Event research', {
-      id: 'doc-secret-medical',
-      name: 'QUARANTINE RECORDS',
-      type: 'document',
-      description: 'Quarantine records with disturbing details.',
-      quantity: 1,
-    });
-
-    // Breakers for expansion areas
-    const storageBreakers = [
-      this.makeBreaker('storage-breaker-a', 30, 1.1, -18, 'Storage Feed'),
-      this.makeBreaker('storage-breaker-b', 38, 1.1, -18, 'Office Relay'),
-    ];
-
-    const generatorSwitches = [
-      this.makeCoreSwitch('generator-switch-1', 58, 1.2, 38, 0, 10),
-      this.makeCoreSwitch('generator-switch-2', 62, 1.2, 44, 1, 11),
-      this.makeCoreSwitch('generator-switch-3', 66, 1.2, 38, 2, 12),
-    ];
-
-    // Terminals for expansion
-    const terminalOffice = this.makeTerminal('terminal-office', 18, 1.05, 20, 'office-terminal');
-    const terminalMedical = this.makeTerminal('terminal-medical', 2, 1.05, -14, 'medical-terminal');
-    const terminalContainment = this.makeTerminal('terminal-containment', 52, 1.05, -26, 'containment-terminal');
-    const terminalGenerator = this.makeTerminal('terminal-generator', 60, 1.05, 40, 'generator-terminal');
-    const terminalIndustrial = this.makeTerminal('terminal-industrial', 94, 1.05, 16, 'industrial-terminal');
-
-    // Keypads
-    const keypadOffice = this.makeKeypad('keypad-office', 20, 1.35, 14, 'office-keypad');
-    const keypadLabAnnex = this.makeKeypad('keypad-labAnnex', 42, 1.35, -28, 'labAnnex-keypad');
-
-    // Hide spots
-    const hideOffice = this.makeHideLocker('hide-office', 12, 20);
-    const hideMedical = this.makeHideLocker('hide-medical', 8, -14);
-    const hideContainment = this.makeHideLocker('hide-containment-a', 50, -28);
-    const hideContainment2 = this.makeHideLocker('hide-containment-b', 58, -28);
-    const hideGenerator = this.makeHideLocker('hide-generator-a', 58, 40);
-    const hideGenerator2 = this.makeHideLocker('hide-generator-b', 66, 40);
-    const hideIndustrial = this.makeHideLocker('hide-industrial', 92, 16);
-    const hideOutdoor = this.makeHideLocker('hide-outdoor', 128, -6);
-
-    const chargerOffice = this.makeCharger('charger-office', 26, 22, -Math.PI / 2);
-    const chargerMedical = this.makeCharger('charger-medical', -2, -14, Math.PI / 2);
-    const chargerContainment = this.makeCharger('charger-containment', 54, -20, 0);
-    const chargerGenerator = this.makeCharger('charger-generator', 62, 32, 0);
-    const chargerIndustrial = this.makeCharger('charger-industrial', 90, 16, Math.PI / 2);
-
-    // Boss arena switches
-    const behemothGen1 = new SwitchInteractable('behemoth-gen-1', this.createSwitchMesh(47, 1.1, -23), 'Primary generator activated - Behemoth containment', (game) => {
-      const boss = game.bosses.find(b => b.type === 'behemoth');
-      if (boss) {
-        boss.activateGenerator();
-        game.audio.playUiBeep();
-        if (boss['arenaState'].generatorsActivated >= 2) {
-          game.queueSubtitle('SYSTEM', 'Both generators online - redirect power at containment terminal', 4.0);
-        }
-      }
-    }, '[E] ACTIVATE GENERATOR');
-
-    const behemothGen2 = new SwitchInteractable('behemoth-gen-2', this.createSwitchMesh(61, 1.1, -23), 'Secondary generator activated - Behemoth containment', (game) => {
-      const boss = game.bosses.find(b => b.type === 'behemoth');
-      if (boss) {
-        boss.activateGenerator();
-        game.audio.playUiBeep();
-        if (boss['arenaState'].generatorsActivated >= 2) {
-          game.queueSubtitle('SYSTEM', 'Both generators online - redirect power at containment terminal', 4.0);
-        }
-      }
-    }, '[E] ACTIVATE GENERATOR');
-
-    const voltSwitch1 = new SwitchInteractable('volt-switch-1', this.createSwitchMesh(58, 1.1, 36), 'Generator switch 1 restored', (game) => {
-      game.puzzles.generatorSwitches[0] = true;
-      const boss = game.bosses.find(b => b.type === 'volt');
-      if (boss) boss.activateGenerator();
-      game.audio.playUiBeep();
-    }, '[E] RESTORE GENERATOR');
-
-    const voltSwitch2 = new SwitchInteractable('volt-switch-2', this.createSwitchMesh(62, 1.1, 42), 'Generator switch 2 restored', (game) => {
-      game.puzzles.generatorSwitches[1] = true;
-      const boss = game.bosses.find(b => b.type === 'volt');
-      if (boss) boss.activateGenerator();
-      game.audio.playUiBeep();
-    }, '[E] RESTORE GENERATOR');
-
-    const voltSwitch3 = new SwitchInteractable('volt-switch-3', this.createSwitchMesh(66, 1.1, 36), 'Generator switch 3 restored - power grid stable', (game) => {
-      game.puzzles.generatorSwitches[2] = true;
-      const boss = game.bosses.find(b => b.type === 'volt');
-      if (boss) boss.activateGenerator();
-      game.audio.playUiBeep();
-      if (game.puzzles.generatorSwitches.every(Boolean)) {
-        game.progress.powerGridRestored = true;
-        game.setObjective('enterIndustrial');
-        game.queueSubtitle('SYSTEM', 'All generators restored - Volt entity contained', 4.0);
-      }
-    }, '[E] RESTORE GENERATOR');
-
     this.interactables.push(
       flashlight,
       battery1,
@@ -2667,50 +1602,6 @@ export class Facility {
       coreSwitch1,
       coreSwitch2,
       coreSwitch3,
-      // Expansion
-      officeKeycard,
-      medicalKeycard,
-      containmentKeycard,
-      maintenanceLowerKeycard,
-      batteryOffice,
-      batteryMedical,
-      batteryGenerator,
-      medkit2,
-      medkit3,
-      officeMemo,
-      medicalReport,
-      containmentLog,
-      generatorLog,
-      industrialMemo,
-      secretOfficeDoc,
-      secretMedicalDoc,
-      ...storageBreakers,
-      ...generatorSwitches,
-      terminalOffice,
-      terminalMedical,
-      terminalContainment,
-      terminalGenerator,
-      terminalIndustrial,
-      keypadOffice,
-      keypadLabAnnex,
-      hideOffice,
-      hideMedical,
-      hideContainment,
-      hideContainment2,
-      hideGenerator,
-      hideGenerator2,
-      hideIndustrial,
-      hideOutdoor,
-      chargerOffice,
-      chargerMedical,
-      chargerContainment,
-      chargerGenerator,
-      chargerIndustrial,
-      behemothGen1,
-      behemothGen2,
-      voltSwitch1,
-      voltSwitch2,
-      voltSwitch3,
     );
   }
 
@@ -2718,62 +1609,27 @@ export class Facility {
     const nodes: PatrolNode[] = [
       { id: 'intake', position: new Vector3(0, 0, 0), neighbors: ['intake-hall'], zone: 'intake' },
       { id: 'intake-hall', position: new Vector3(8, 0, 0), neighbors: ['intake', 'lobby-west'], zone: 'intake' },
-      { id: 'lobby-west', position: new Vector3(14, 0, 0), neighbors: ['intake-hall', 'lobby-center', 'security-hall', 'medical-hall'], zone: 'lobby' },
-      { id: 'lobby-center', position: new Vector3(21, 0, 0), neighbors: ['lobby-west', 'research-entry', 'maint-hub', 'office-hall', 'checkpoint'], zone: 'lobby' },
+      { id: 'lobby-west', position: new Vector3(14, 0, 0), neighbors: ['intake-hall', 'lobby-center', 'security-hall'], zone: 'lobby' },
+      { id: 'lobby-center', position: new Vector3(21, 0, 0), neighbors: ['lobby-west', 'research-entry', 'maint-hub'], zone: 'lobby' },
       { id: 'security-hall', position: new Vector3(20, 0, -10), neighbors: ['lobby-west', 'security-room'], zone: 'security' },
       { id: 'security-room', position: new Vector3(20, 0, -14), neighbors: ['security-hall', 'l2-door'], zone: 'security' },
       { id: 'l2-door', position: new Vector3(20, 0, -19), neighbors: ['security-room', 'l2-hall'], zone: 'level2' },
       { id: 'l2-hall', position: new Vector3(20, 0, -23), neighbors: ['l2-door', 'l2-deck'], zone: 'level2' },
-      { id: 'l2-deck', position: new Vector3(20, 0, -34), neighbors: ['l2-hall', 'l2-north'], zone: 'level2' },
-      { id: 'l2-north', position: new Vector3(20, 0, -41), neighbors: ['l2-deck'], zone: 'level2' },
-      { id: 'maint-hub', position: new Vector3(34, 0, 7), neighbors: ['lobby-center', 'maint-gen', 'checkpoint'], zone: 'maintenance' },
-      { id: 'maint-gen', position: new Vector3(40, 0, 18), neighbors: ['maint-hub', 'maint-lower-corridor', 'service-north', 'secret-maintenance'], zone: 'maintenance' },
-      { id: 'maint-lower-corridor', position: new Vector3(34, 0, 28), neighbors: ['maint-gen', 'maint-lower'], zone: 'maintenanceLower' },
-      { id: 'maint-lower', position: new Vector3(34, 0, 40), neighbors: ['maint-lower-corridor', 'generator-hall'], zone: 'maintenanceLower' },
-      { id: 'generator-hall', position: new Vector3(48, 0, 40), neighbors: ['maint-lower', 'generator-complex'], zone: 'generator' },
-      { id: 'generator-complex', position: new Vector3(62, 0, 40), neighbors: ['generator-hall', 'industrial-south'], zone: 'generator' },
-      { id: 'research-entry', position: new Vector3(34, 0, -6), neighbors: ['lobby-center', 'research-lab', 'checkpoint'], zone: 'research' },
-      { id: 'research-lab', position: new Vector3(48, 0, -6), neighbors: ['research-entry', 'archive-hall', 'containment-corridor', 'storage-wing'], zone: 'research' },
-      { id: 'storage-wing', position: new Vector3(20, 0, -20), neighbors: ['research-lab', 'medical-storage', 'secret-medical'], zone: 'storage' },
-      { id: 'containment-corridor', position: new Vector3(48, 0, -16), neighbors: ['research-lab', 'containment-annex'], zone: 'containment' },
-      { id: 'containment-annex', position: new Vector3(54, 0, -28), neighbors: ['containment-corridor', 'lab-annex'], zone: 'containment' },
-      { id: 'lab-annex', position: new Vector3(36, 0, -28), neighbors: ['containment-annex'], zone: 'labAnnex' },
+      { id: 'l2-deck', position: new Vector3(20, 0, -34), neighbors: ['l2-hall'], zone: 'level2' },
+      { id: 'maint-hub', position: new Vector3(34, 0, 7), neighbors: ['lobby-center', 'maint-gen'], zone: 'maintenance' },
+      { id: 'maint-gen', position: new Vector3(34, 0, 18), neighbors: ['maint-hub'], zone: 'maintenance' },
+      { id: 'research-entry', position: new Vector3(34, 0, -6), neighbors: ['lobby-center', 'research-lab'], zone: 'research' },
+      { id: 'research-lab', position: new Vector3(48, 0, -6), neighbors: ['research-entry', 'archive-hall'], zone: 'research' },
       { id: 'archive-hall', position: new Vector3(60, 0, -6), neighbors: ['research-lab', 'underground-west'], zone: 'research' },
       { id: 'underground-west', position: new Vector3(68, 0, -6), neighbors: ['archive-hall', 'underground-east', 'underground-south'], zone: 'underground' },
-      { id: 'underground-east', position: new Vector3(82, 0, -6), neighbors: ['underground-west', 'underground-south', 'core-hall', 'industrial-corridor'], zone: 'underground' },
+      { id: 'underground-east', position: new Vector3(82, 0, -6), neighbors: ['underground-west', 'underground-south', 'core-hall'], zone: 'underground' },
       { id: 'underground-south', position: new Vector3(74, 0, -2), neighbors: ['underground-west', 'underground-east', 'shelter-entry'], zone: 'underground' },
       { id: 'shelter-entry', position: new Vector3(74, 0, 1.5), neighbors: ['underground-south', 'shelter'], zone: 'underground' },
-      { id: 'shelter', position: new Vector3(74, 0, 8), neighbors: ['shelter-entry', 'l3-hall', 'service-south'], zone: 'underground' },
-      { id: 'service-north', position: new Vector3(44, 0, 8), neighbors: ['maint-gen', 'service-center'], zone: 'service' },
-      { id: 'service-center', position: new Vector3(50, 0, 18), neighbors: ['service-north', 'industrial-corridor', 'generator-complex', 'secret-maintenance'], zone: 'service' },
-      { id: 'service-south', position: new Vector3(74, 0, 16.5), neighbors: ['shelter', 'l3-core'], zone: 'service' },
+      { id: 'shelter', position: new Vector3(74, 0, 8), neighbors: ['shelter-entry', 'l3-hall'], zone: 'underground' },
       { id: 'l3-hall', position: new Vector3(74, 0, 16.5), neighbors: ['shelter', 'l3-core'], zone: 'level3' },
-      { id: 'l3-core', position: new Vector3(74, 0, 27), neighbors: ['l3-hall', 'l3-south', 'l3-east'], zone: 'level3' },
-      { id: 'l3-south', position: new Vector3(74, 0, 34), neighbors: ['l3-core'], zone: 'level3' },
-      { id: 'l3-east', position: new Vector3(83, 0, 27), neighbors: ['l3-core', 'industrial-sector'], zone: 'level3' },
-      { id: 'core-hall', position: new Vector3(90.5, 0, -6), neighbors: ['underground-east', 'core-room', 'industrial-sector'], zone: 'core' },
-      { id: 'core-room', position: new Vector3(104, 0, -6), neighbors: ['core-hall', 'outdoor-corridor'], zone: 'core' },
-      { id: 'outdoor-corridor', position: new Vector3(116, 0, -6), neighbors: ['core-room', 'outdoor-yard'], zone: 'outdoor' },
-      { id: 'outdoor-yard', position: new Vector3(130, 0, -6), neighbors: ['outdoor-corridor'], zone: 'outdoor' },
-      // Office wing - clean north layout
-      { id: 'office-hall', position: new Vector3(20, 0, 11), neighbors: ['lobby-center', 'office-main', 'breakroom'], zone: 'office' },
-      { id: 'office-main', position: new Vector3(20, 0, 22), neighbors: ['office-hall', 'office-storage', 'secret-office'], zone: 'office' },
-      { id: 'office-storage', position: new Vector3(6, 0, 22), neighbors: ['office-main'], zone: 'storage' },
-      { id: 'breakroom', position: new Vector3(6, 0, 10), neighbors: ['office-hall'], zone: 'abandoned' },
-      { id: 'secret-office', position: new Vector3(30, 0, 22), neighbors: ['office-main'], zone: 'office' },
-      // Medical
-      { id: 'medical-hall', position: new Vector3(12, 0, -8), neighbors: ['lobby-west', 'medical-bay'], zone: 'medical' },
-      { id: 'medical-bay', position: new Vector3(4, 0, -14), neighbors: ['medical-hall', 'medical-storage', 'secret-medical'], zone: 'medical' },
-      { id: 'medical-storage', position: new Vector3(4, 0, -26), neighbors: ['medical-bay'], zone: 'storage' },
-      { id: 'secret-medical', position: new Vector3(14.5, 0, -20), neighbors: ['medical-bay'], zone: 'medical' },
-      // Checkpoint
-      { id: 'checkpoint', position: new Vector3(29, 0, 0), neighbors: ['lobby-center', 'maint-hub', 'research-entry'], zone: 'checkpoint' },
-      // Industrial
-      { id: 'industrial-corridor', position: new Vector3(84, 0, 10), neighbors: ['underground-east', 'industrial-sector', 'service-center'], zone: 'industrial' },
-      { id: 'industrial-sector', position: new Vector3(96, 0, 16), neighbors: ['industrial-corridor', 'core-hall', 'l3-east'], zone: 'industrial' },
-      { id: 'industrial-south', position: new Vector3(96, 0, 30), neighbors: ['generator-complex'], zone: 'industrial' },
-      // Secret maintenance - east of maintenance at 40,18
-      { id: 'secret-maintenance', position: new Vector3(48, 0, 14), neighbors: ['maint-gen', 'service-center'], zone: 'maintenance' },
+      { id: 'l3-core', position: new Vector3(74, 0, 27), neighbors: ['l3-hall'], zone: 'level3' },
+      { id: 'core-hall', position: new Vector3(90.5, 0, -6), neighbors: ['underground-east', 'core-room'], zone: 'core' },
+      { id: 'core-room', position: new Vector3(104, 0, -6), neighbors: ['core-hall'], zone: 'core' },
     ];
 
     for (const node of nodes) {
@@ -2788,14 +1644,6 @@ export class Facility {
     this.addCamera('core-cam', 'Core Chamber', new Vector3(104, 2.8, -13.2), new Vector3(104, 1.5, -6), 'Containment lattice observation.');
     this.addCamera('level2-cam', 'Observation Deck', new Vector3(26.6, 2.7, -29.2), new Vector3(20, 1.4, -34), 'Level 2 observation deck feed.');
     this.addCamera('level3-cam', 'Level 3 Storage', new Vector3(66.2, 2.7, 21.6), new Vector3(74, 1.4, 27), 'Level 3 containment storage feed.');
-    // Expansion cameras
-    this.addCamera('office-cam', 'Office Wing', new Vector3(20, 2.7, 12), new Vector3(20, 1.4, 20), 'Office wing - abandoned after evacuation.');
-    this.addCamera('medical-cam', 'Medical Bay', new Vector3(4, 2.7, -8), new Vector3(4, 1.4, -14), 'Medical bay - quarantine protocols active.');
-    this.addCamera('containment-cam', 'Containment Annex', new Vector3(54, 2.8, -20), new Vector3(54, 1.4, -28), 'Containment Annex - BEHEMOTH CONTAINMENT BREACH.');
-    this.addCamera('generator-cam', 'Generator Complex', new Vector3(62, 2.8, 32), new Vector3(62, 1.4, 40), 'Generator Complex - VOLT ENTITY DETECTED.');
-    this.addCamera('industrial-cam', 'Industrial Sector', new Vector3(96, 2.8, 8), new Vector3(96, 1.4, 16), 'Industrial sector - heavy machinery offline.');
-    this.addCamera('outdoor-cam', 'Outdoor Yard', new Vector3(130, 3.5, -6), new Vector3(116, 1.4, -6), 'Outdoor yard - emergency exit route.');
-    this.addCamera('checkpoint-cam', 'Security Checkpoint', new Vector3(29, 2.8, -3), new Vector3(29, 1.4, 0), 'Security checkpoint - access control.');
   }
 
   private createTerminals(): void {
@@ -2811,15 +1659,10 @@ export class Facility {
           title: 'STAFF MAIL: HALE',
           body: 'If Maintenance lost their access cards, the Level 2 security card stays in the lower desk drawer. Do not send anyone alone below the archive gate again.',
         },
-        {
-          title: 'EXPANSION NOTICE',
-          body: 'Facility expansion complete:\n- Office Wing keycard in break room filing cabinet\n- Medical Bay requires medical keycard from storage\n- Containment Annex sealed after Behemoth breach\n- Generator Complex offline, Volt entity roaming\n- Industrial Sector connects to outdoor yard',
-        },
       ],
-      cameras: ['lobby-cam', 'research-cam', 'level2-cam', 'office-cam', 'checkpoint-cam'],
+      cameras: ['lobby-cam', 'research-cam', 'level2-cam'],
       actions: [
         { id: 'route-maintenance', label: 'Reroute grid diagnostics', description: 'Highlights Maintenance as the only active power route.' },
-        { id: 'unlock-office', label: 'Unlock Office Wing', description: 'Grants access to Office Wing via security override.' },
       ],
     });
 
@@ -2837,19 +1680,10 @@ export class Facility {
           title: 'EMAIL / CORE LOCKDOWN',
           body: 'To reach the core you need the Level 3 card relocated to the lower shelter. Archive blast code remains unchanged: 4138. If anyone is still there, do not speak to the chamber through the lattice.',
         },
-        {
-          title: 'BEHEMOTH CONTAINMENT LOG',
-          body: 'Containment Annex Log:\n- Subject: BEHEMOTH - mass 400kg, height 2.8m\n- Behavior: Hunts via sound, vulnerable to light, must be escaped not killed\n- Weakness: Requires generator activation to open containment purge\n- Arena contains multiple routes, cover, machinery\n- DO NOT ENGAGE DIRECTLY - SURVIVAL AND ESCAPE ONLY',
-        },
-        {
-          title: 'VOLT ENTITY REPORT',
-          body: 'Generator Complex Log:\n- Subject: VOLT - electromagnetic entity\n- Behavior: Manipulates electricity, turns off lights, creates hazards\n- Weakness: Light and power restoration\n- Must restore 3 generator switches while avoiding entity\n- Lighting changes during encounter',
-        },
       ],
-      cameras: ['research-cam', 'archive-cam', 'containment-cam'],
+      cameras: ['research-cam', 'archive-cam'],
       actions: [
         { id: 'unlock-archive', label: 'Flag archive code in notes', description: 'Marks the archive code as verified in your objective log.' },
-        { id: 'behemoth-info', label: 'Behemoth Containment Protocol', description: 'Reveals Behemoth weaknesses and escape route.' },
       ],
     });
 
@@ -2865,102 +1699,11 @@ export class Facility {
           title: 'ESCAPE ROUTING',
           body: 'Once all three lattice switches are restored you may either stabilize the suppression field and escape, or purge the facility with the entity still inside. Stabilization preserves the research. Purge burns everything.',
         },
-        {
-          title: 'CORE ENTITY - FINAL LOG',
-          body: 'Final Entity Report:\n- The Suppression Event created a consciousness\n- It lives in the lattice itself\n- It changes environment, manipulates reality\n- Requires understanding of all previous encounters\n- Final arena: multiple routes, environmental hazards, dynamic lighting\n- This is connected directly to the Suppression Event',
-        },
       ],
-      cameras: ['core-cam', 'level3-cam', 'generator-cam', 'industrial-cam'],
+      cameras: ['core-cam', 'level3-cam'],
       actions: [
         { id: 'ending-stabilize', label: 'Stabilize lattice', description: 'Restore the field and flee while the facility holds.' },
         { id: 'ending-purge', label: 'Purge containment', description: 'Overload the core, destroy the wing, and escape.' },
-        { id: 'core-entity-info', label: 'Core Entity Protocol', description: 'Final entity information.' },
-      ],
-    });
-
-    // New terminals for expansion areas
-    this.terminals.set('office-terminal', {
-      id: 'office-terminal',
-      name: 'OFFICE WORKSTATION',
-      files: [
-        {
-          title: 'OFFICE MEMO',
-          body: 'Staff notice:\n- Break room coffee machine still broken\n- Medical keycard relocated to storage locker\n- Containment access requires Level 2 card\n- Generator Complex maintenance overdue\n- Anyone seen strange lights in containment annex?',
-        },
-        {
-          title: 'SECURITY CODES',
-          body: 'Temporary codes:\n- Office: 2847\n- Medical Storage: 9135\n- Lab Annex: 5562',
-        },
-      ],
-      cameras: ['office-cam', 'lobby-cam'],
-      actions: [
-        { id: 'unlock-medical', label: 'Unlock Medical Bay', description: 'Grants medical bay access.' },
-      ],
-    });
-
-    this.terminals.set('medical-terminal', {
-      id: 'medical-terminal',
-      name: 'MEDICAL STATION',
-      files: [
-        {
-          title: 'MEDICAL LOG',
-          body: 'Patient log:\n- Multiple staff with lacerations from containment breach\n- Strange burns from electrical entity in generator complex\n- Psychological evaluations: hearing voices near core\n- Recommendation: evacuate all personnel',
-        },
-        {
-          title: 'SUPPLY INVENTORY',
-          body: 'Medical supplies low. Emergency cache in storage area. Keycard in office.',
-        },
-      ],
-      cameras: ['medical-cam', 'office-cam'],
-      actions: [
-        { id: 'medical-supplies', label: 'Dispense Medical Supplies', description: 'Provides medical kit.' },
-      ],
-    });
-
-    this.terminals.set('containment-terminal', {
-      id: 'containment-terminal',
-      name: 'CONTAINMENT CONTROL',
-      files: [
-        {
-          title: 'BEHEMOTH PROTOCOL',
-          body: 'Emergency protocol for Behemoth breach:\n1. Activate primary generator (north side)\n2. Activate secondary generator (south side)\n3. Redirect power to containment purge\n4. Avoid Behemoth - use cover and multiple routes\n5. Reach security door and escape\n6. Do not attempt to kill - survival only',
-        },
-      ],
-      cameras: ['containment-cam', 'research-cam'],
-      actions: [
-        { id: 'activate-behemoth-generators', label: 'Activate Generators', description: 'Powers containment systems for escape.' },
-        { id: 'purge-containment', label: 'Purge Containment', description: 'Opens escape route - triggers Behemoth chase.' },
-      ],
-    });
-
-    this.terminals.set('generator-terminal', {
-      id: 'generator-terminal',
-      name: 'GENERATOR CONTROL',
-      files: [
-        {
-          title: 'VOLT ENTITY CONTAINMENT',
-          body: 'Volt Entity Protocol:\n1. Restore power to 3 generator switches\n2. Avoid entity - it hunts in darkness\n3. Use flashlight to slow it\n4. Electrical hazards active during encounter\n5. Lighting changes indicate entity proximity\n6. Escape via industrial sector after power restored',
-        },
-      ],
-      cameras: ['generator-cam', 'industrial-cam'],
-      actions: [
-        { id: 'restore-generator-power', label: 'Restore Generator Power', description: 'Restores power - triggers Volt encounter.' },
-        { id: 'volt-weakness', label: 'Volt Weakness Analysis', description: 'Reveals Volt vulnerabilities.' },
-      ],
-    });
-
-    this.terminals.set('industrial-terminal', {
-      id: 'industrial-terminal',
-      name: 'INDUSTRIAL CONTROL',
-      files: [
-        {
-          title: 'INDUSTRIAL LOG',
-          body: 'Industrial sector connects lower maintenance to outdoor yard. Emergency exit via outdoor gate requires Level 3 keycard. Heavy machinery still active - use caution.',
-        },
-      ],
-      cameras: ['industrial-cam', 'outdoor-cam'],
-      actions: [
-        { id: 'unlock-outdoor', label: 'Unlock Outdoor Gate', description: 'Opens outdoor emergency exit.' },
       ],
     });
   }
@@ -2973,14 +1716,6 @@ export class Facility {
       { x: 48, z: -6, w: 18, d: 16, count: 200 },
       { x: 74, z: -6, w: 24, d: 12, count: 260 },
       { x: 104, z: -6, w: 18, d: 16, count: 210 },
-      // Expansion particle layers
-      { x: 20, z: 20, w: 18, d: 16, count: 180 },
-      { x: 4, z: -14, w: 16, d: 14, count: 170 },
-      { x: 54, z: -28, w: 22, d: 18, count: 220 },
-      { x: 34, z: 40, w: 20, d: 16, count: 200 },
-      { x: 62, z: 40, w: 20, d: 18, count: 210 },
-      { x: 96, z: 16, w: 22, d: 18, count: 200 },
-      { x: 130, z: -6, w: 20, d: 20, count: 150 },
     ];
 
     for (const layer of layers) {
@@ -3257,15 +1992,6 @@ export class Facility {
     box.position.set(x, y, z);
     this.root.add(box);
     return new SwitchInteractable(id, box, `Lattice switch ${suffix + 1} restored.`, (game) => game.activateCoreSwitch(index), '[E] RESTORE LATTICE');
-  }
-
-  private createSwitchMesh(x: number, y: number, z: number): Mesh {
-    const mesh = new Mesh(new BoxGeometry(0.55, 0.75, 0.22), new MeshStandardMaterial({ color: 0x6a737c, roughness: 0.5, metalness: 0.7, emissive: new Color(0x1a2a3a), emissiveIntensity: 0.5 }));
-    mesh.position.set(x, y, z);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    this.root.add(mesh);
-    return mesh;
   }
 
   private addCamera(id: string, name: string, position: Vector3, lookAt: Vector3, hint: string): void {
@@ -3786,18 +2512,6 @@ export class Facility {
       case 'level2': return 'Observation Deck';
       case 'level3': return 'Level 3 Storage';
       case 'core': return 'Suppression Core';
-      case 'office': return 'Office Wing';
-      case 'medical': return 'Medical Bay';
-      case 'storage': return 'Storage';
-      case 'checkpoint': return 'Security Checkpoint';
-      case 'generator': return 'Generator Complex';
-      case 'service': return 'Service Corridor';
-      case 'industrial': return 'Industrial Sector';
-      case 'containment': return 'Containment Annex';
-      case 'abandoned': return 'Employee Area';
-      case 'labAnnex': return 'Research Annex';
-      case 'maintenanceLower': return 'Lower Maintenance';
-      case 'outdoor': return 'Outdoor Yard';
       default:
         return 'Facility';
     }
