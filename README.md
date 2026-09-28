@@ -7,13 +7,35 @@ The player wakes inside an abandoned research and containment facility after the
 The project is fully playable in a modern desktop browser and includes:
 
 - First-person movement with pointer lock, sprint, crouch, stamina, head bob, and camera motion
-- Flashlight gameplay with dynamic spotlight, shadows, battery drain, flicker, and pickups
+- Flashlight gameplay with dynamic spotlight, volumetric beam, shadows, battery drain, flicker, and pickups
 - Interactions via raycasting
 - A modular interconnected facility with multiple themed zones
 - Inventory, documents, terminals, keypad access, objectives, pause menu, credits, settings, subtitles, and save/load slots
 - Procedural fallback audio generated with the Web Audio API
 - Enemy AI with patrol, investigate, search, chase, ambush, and hearing behavior
 - Environmental horror events, security camera feeds, hiding spots, and an ending choice
+
+## Graphics & RTX-style rendering
+
+The renderer is built around a modular post-processing pipeline that approximates
+ray-traced effects in WebGL (no hardware RT is required, and none is claimed):
+
+- **RTX quality tier** — screen-space reflections (SSR), image-based lighting
+  probes (PMREM environment), planar reflections on flooded floors, GTAO ambient
+  occlusion, bloom and volumetric light shafts
+- **Six quality levels**: LOW, MEDIUM, HIGH, ULTRA, EXTREME, RTX — each seeds
+  shadow quality, lighting quality, reflection quality, post-processing, bloom,
+  ambient occlusion and volumetric toggles that remain individually adjustable
+- Dynamic point-light shadow budget (up to 2048px PCF-soft maps) plus a
+  shadow-casting player proxy for realistic player shadows
+- Per-fixture lighting brains: fluorescent restrike stutter, faulty dropouts,
+  random power failures with emergency-red surges, synchronized light shafts,
+  glowing tubes and spark bursts
+- Environment detail: pipes with collars, cable runs, electrical panels with
+  blinking indicators, vents, warning placards, rust/grunge decals, broken
+  equipment, instanced debris, steam plumes, water leaks, and drifting dust
+- Cinematic grade: subtle chromatic aberration, film grain, vignette, black
+  lift, and screen-warp distortion pulses during supernatural events
 
 ## Requirements
 
@@ -63,6 +85,11 @@ F3         Debug Overlay
 F4         Enemy Debug
 F5         Debug Teleport
 ```
+
+Graphics options live under **Settings → Graphics**: quality preset (6 tiers),
+shadow / lighting / reflection quality, post-processing, bloom, ambient
+occlusion, volumetric lights, fog density, view distance, resolution scaling,
+anti-aliasing and brightness.
 
 Controls can be rebound from the **Settings → Controls** menu.
 

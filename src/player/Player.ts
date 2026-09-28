@@ -1,6 +1,12 @@
 import {
+  AdditiveBlending,
+  Color,
+  CylinderGeometry,
+  DoubleSide,
   Group,
   MathUtils,
+  Mesh,
+  MeshBasicMaterial,
   PerspectiveCamera,
   SpotLight,
   Vector3,
@@ -21,6 +27,7 @@ import {
 import { InputManager } from '../core/InputManager';
 import { Inventory } from '../inventory/Inventory';
 import type { AudioManager } from '../audio/AudioManager';
+import { lightConeGradientTexture } from '../world/Textures';
 import type { GameSettings, HideSpotView, PlayerSaveState } from '../types';
 import type { Facility } from '../world/Facility';
 
@@ -29,9 +36,20 @@ const WORLD_UP = new Vector3(0, 1, 0);
 export class Player {
   public readonly body = new Group();
   public readonly camera = new PerspectiveCamera(75, 1, 0.1, 90);
-  public readonly flashlight = new SpotLight(0xe6f2ff, 5.8, 26, Math.PI / 7.6, 0.34, 1.3);
+  public readonly flashlight = new SpotLight(0xeef5ff, 7.6, 30, Math.PI / 7.4, 0.36, 1.25);
   public readonly flashlightTarget = new Group();
   public readonly inventory = new Inventory();
+
+  /** Invisible collision body that still casts the player's dynamic shadow. */
+  private readonly shadowProxy = new Mesh(
+    new CylinderGeometry(0.3, 0.3, 1.7, 10),
+    // colorWrite/depthWrite off: only the shadow map ever sees it.
+    new MeshBasicMaterial({ colorWrite: false, depthWrite: false }),
+  );
+
+  /** Additive volumetric cone that makes the flashlight beam visible in fog. */
+  private readonly beam: Mesh;
+  private appliedShadowQuality: string | null = null;
 
   public yaw = Math.PI;
   public pitch = 0;
@@ -55,6 +73,35 @@ export class Player {
     this.camera.position.set(0, PLAYER_HEIGHT, 0);
     this.body.add(this.camera);
 
+    this.shadowProxy.position.y = 0.85;
+    this.shadowProxy.castShadow = true;
+    this.body.add(this.shadowProxy);
+
+    // Wide at the far end, tight at the lamp; gradient flips so it is
+    // brightest right in front of the flashlight and fades into the dark.
+    const beamGradient = lightConeGradientTexture().clone();
+    beamGradient.needsUpdate = true;
+    beamGradient.repeat.y = -1;
+    beamGradient.offset.y = 1;
+    this.beam = new Mesh(
+      new CylinderGeometry(1.05, 0.05, 7.5, 20, 1, true),
+      new MeshBasicMaterial({
+        color: new Color(0xcfe0ff),
+        transparent: true,
+        opacity: 0.075,
+        map: beamGradient,
+        blending: AdditiveBlending,
+        depthWrite: false,
+        side: DoubleSide,
+        fog: false,
+      }),
+    );
+    this.beam.rotation.x = -Math.PI / 2;
+    this.beam.position.set(0.08, -0.05, -3.7);
+    this.beam.visible = false;
+    this.beam.renderOrder = 3;
+    this.camera.add(this.beam);
+
     this.flashlight.position.set(0.08, -0.02, -0.02);
     this.flashlight.castShadow = true;
     this.flashlight.shadow.mapSize.width = 1024;
@@ -66,6 +113,32 @@ export class Player {
     this.camera.add(this.flashlightTarget);
     this.flashlight.target = this.flashlightTarget;
     this.flashlightTarget.position.set(0, 0, -8);
+  }
+
+  /** Applies shadow-quality driven flashlight settings. */
+  public applyGraphics(settings: GameSettings): void {
+    const quality = settings.graphics.shadowQuality;
+    if (this.appliedShadowQuality === quality) {
+      return;
+    }
+    this.appliedShadowQuality = quality;
+    const enabled = quality !== 'off';
+    this.flashlight.castShadow = enabled;
+    this.shadowProxy.castShadow = enabled;
+    const size = quality === 'high' ? 2048 : quality === 'medium' ? 1024 : 512;
+    if (enabled && (this.flashlight.shadow.mapSize.width !== size || this.flashlight.shadow.mapSize.height !== size)) {
+      this.flashlight.shadow.mapSize.set(size, size);
+      if (this.flashlight.shadow.map) {
+        this.flashlight.shadow.map.dispose();
+        this.flashlight.shadow.map = null;
+      }
+    }
+    this.flashlight.shadow.radius = quality === 'high' ? 3.5 : 2;
+  }
+
+  /** Camera shake impulse for supernatural events and heavy hits. */
+  public addShake(amount: number): void {
+    this.shakeAmount = Math.min(1.6, this.shakeAmount + amount);
   }
 
   public get position(): Vector3 {
@@ -202,7 +275,9 @@ export class Player {
       const flickerFactor = this.flashlightBattery < LOW_BATTERY_THRESHOLD ? 0.8 : 1;
       this.flashlightBattery = Math.max(0, this.flashlightBattery - FLASHLIGHT_DRAIN_PER_SECOND * dt);
       this.flashlight.visible = true;
-      this.flashlight.intensity = (moving ? 5.9 : 5.5) * flickerFactor;
+      // Micro-sway sells a heavy, slightly failing lamp
+      const idleFlicker = 1 + Math.sin(performance.now() * 0.013) * 0.02;
+      this.flashlight.intensity = (moving ? 7.9 : 7.4) * flickerFactor * idleFlicker;
       this.flashlight.angle = MathUtils.lerp(this.flashlight.angle, moving ? Math.PI / 7.1 : Math.PI / 7.8, 0.07);
       this.flashlight.penumbra = moving ? 0.42 : 0.35;
 
@@ -218,15 +293,22 @@ export class Player {
       if (this.flashlightFailureTimer > 0) {
         this.flashlightFailureTimer -= dt;
         this.flashlight.visible = false;
+        this.beam.visible = false;
       }
+
+      this.beam.visible = this.flashlight.visible;
+      const beamMaterial = this.beam.material as MeshBasicMaterial;
+      beamMaterial.opacity = 0.05 * flickerFactor * (moving ? 1.15 : 1);
 
       if (this.flashlightBattery <= 0) {
         this.flashlightOn = false;
         this.flashlight.visible = false;
+        this.beam.visible = false;
         audio.playUiError();
       }
     } else {
       this.flashlight.visible = false;
+      this.beam.visible = false;
       this.lowBatteryWarned = false;
       this.flashlightFailureTimer = 0;
     }

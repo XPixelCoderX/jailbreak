@@ -61,6 +61,9 @@ export class Suppressor {
     legL.position.set(-0.14, 0.47, 0);
     const legR = legL.clone();
     legR.position.x = 0.14;
+    for (const part of [head, torso, armL, armR, legL, legR]) {
+      part.castShadow = true;
+    }
     this.root.add(head, torso, armL, armR, legL, legR);
     this.root.position.set(38, 0, 4);
     this.root.visible = false;

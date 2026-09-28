@@ -44,16 +44,37 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   teleportDebug: 'F5',
 };
 
+export type QualityLevel = 'low' | 'medium' | 'high' | 'ultra' | 'extreme' | 'rtx';
+export type ShadowQualityLevel = 'off' | 'low' | 'medium' | 'high';
+export type LightingQualityLevel = 'low' | 'medium' | 'high';
+export type ReflectionQualityLevel = 'off' | 'low' | 'medium' | 'high';
+
+export const QUALITY_LEVELS: QualityLevel[] = ['low', 'medium', 'high', 'ultra', 'extreme', 'rtx'];
+export const SHADOW_QUALITY_LEVELS: ShadowQualityLevel[] = ['off', 'low', 'medium', 'high'];
+export const LIGHTING_QUALITY_LEVELS: LightingQualityLevel[] = ['low', 'medium', 'high'];
+export const REFLECTION_QUALITY_LEVELS: ReflectionQualityLevel[] = ['off', 'low', 'medium', 'high'];
+
+export const BASE_FOG_DENSITY = 0.016;
+export const MAX_BRIGHTNESS = 1.6;
+
 export const DEFAULT_SETTINGS = {
   graphics: {
-    quality: 'high',
+    quality: 'high' as QualityLevel,
     resolutionScale: 1,
     shadows: true,
+    shadowQuality: 'high' as ShadowQualityLevel,
+    lightingQuality: 'high' as LightingQualityLevel,
+    reflectionQuality: 'low' as ReflectionQualityLevel,
+    postProcessing: true,
+    bloom: true,
+    ambientOcclusion: false,
+    volumetrics: true,
     viewDistance: 1,
     effects: true,
     fog: true,
+    fogDensity: 1,
     antialias: true,
-    brightness: 1,
+    brightness: 1.12,
   },
   audio: {
     master: 0.9,

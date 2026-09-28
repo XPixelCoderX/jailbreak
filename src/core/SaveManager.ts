@@ -1,5 +1,5 @@
 import { DEFAULT_SAVE_SLOT, SAVE_SLOTS } from '../config/constants';
-import type { GameSettings, SaveData } from '../types';
+import { migrateSettings, type GameSettings, type SaveData } from '../types';
 
 const SETTINGS_KEY = 'lost-suppression-settings';
 const SLOT_PREFIX = 'lost-suppression-slot-';
@@ -63,7 +63,7 @@ export class SaveManager {
       return null;
     }
     try {
-      return JSON.parse(raw) as GameSettings;
+      return migrateSettings(JSON.parse(raw));
     } catch (error) {
       console.error('Failed to parse settings', error);
       return null;

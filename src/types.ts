@@ -1,5 +1,16 @@
 import type { Box3, Group, Mesh, PerspectiveCamera, Vector3 } from 'three';
-import { DEFAULT_SETTINGS } from './config/constants';
+import {
+  DEFAULT_SETTINGS,
+  LIGHTING_QUALITY_LEVELS,
+  MAX_BRIGHTNESS,
+  QUALITY_LEVELS,
+  REFLECTION_QUALITY_LEVELS,
+  SHADOW_QUALITY_LEVELS,
+  type LightingQualityLevel,
+  type QualityLevel,
+  type ReflectionQualityLevel,
+  type ShadowQualityLevel,
+} from './config/constants';
 
 export type ZoneId =
   | 'intake'
@@ -109,17 +120,27 @@ export interface PlayerSaveState {
   inventory: InventoryItemData[];
 }
 
+export interface GraphicsSettings {
+  quality: QualityLevel;
+  resolutionScale: number;
+  shadows: boolean;
+  shadowQuality: ShadowQualityLevel;
+  lightingQuality: LightingQualityLevel;
+  reflectionQuality: ReflectionQualityLevel;
+  postProcessing: boolean;
+  bloom: boolean;
+  ambientOcclusion: boolean;
+  volumetrics: boolean;
+  viewDistance: number;
+  effects: boolean;
+  fog: boolean;
+  fogDensity: number;
+  antialias: boolean;
+  brightness: number;
+}
+
 export interface GameSettings {
-  graphics: {
-    quality: string;
-    resolutionScale: number;
-    shadows: boolean;
-    viewDistance: number;
-    effects: boolean;
-    fog: boolean;
-    antialias: boolean;
-    brightness: number;
-  };
+  graphics: GraphicsSettings;
   audio: {
     master: number;
     music: number;
@@ -208,4 +229,55 @@ export interface HighlightHandle {
 
 export function cloneDefaultSettings(): GameSettings {
   return JSON.parse(JSON.stringify(DEFAULT_SETTINGS)) as GameSettings;
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function pickEnum<T extends string>(value: unknown, allowed: T[], fallback: T): T {
+  return typeof value === 'string' && (allowed as string[]).includes(value) ? (value as T) : fallback;
+}
+
+/**
+ * Fills in settings added in later versions and upgrades legacy saves so old
+ * player configurations keep working (e.g. the old `shadows` boolean).
+ */
+export function migrateSettings(raw: unknown): GameSettings {
+  const base = cloneDefaultSettings();
+  if (!raw || typeof raw !== 'object') {
+    return base;
+  }
+  const incoming = raw as Partial<GameSettings>;
+  const incomingGraphics = (incoming.graphics ?? {}) as Partial<GraphicsSettings>;
+
+  const graphics: GraphicsSettings = {
+    ...base.graphics,
+    ...incomingGraphics,
+    quality: pickEnum(incomingGraphics.quality, QUALITY_LEVELS, base.graphics.quality),
+    shadowQuality: incomingGraphics.shadowQuality
+      ? pickEnum(incomingGraphics.shadowQuality, SHADOW_QUALITY_LEVELS, base.graphics.shadowQuality)
+      : incomingGraphics.shadows === false
+        ? 'off'
+        : 'high',
+    lightingQuality: pickEnum(incomingGraphics.lightingQuality, LIGHTING_QUALITY_LEVELS, base.graphics.lightingQuality),
+    reflectionQuality: pickEnum(incomingGraphics.reflectionQuality, REFLECTION_QUALITY_LEVELS, base.graphics.reflectionQuality),
+    resolutionScale: clampNumber(incomingGraphics.resolutionScale, base.graphics.resolutionScale, 0.5, 1.5),
+    viewDistance: clampNumber(incomingGraphics.viewDistance, base.graphics.viewDistance, 0.5, 2),
+    fogDensity: clampNumber(incomingGraphics.fogDensity, base.graphics.fogDensity, 0, 1.5),
+    brightness: clampNumber(incomingGraphics.brightness, base.graphics.brightness, 0.5, MAX_BRIGHTNESS),
+  };
+  graphics.shadows = graphics.shadowQuality !== 'off';
+
+  return {
+    graphics,
+    audio: { ...base.audio, ...(incoming.audio ?? {}) },
+    controls: {
+      ...base.controls,
+      ...(incoming.controls ?? {}),
+      bindings: { ...base.controls.bindings, ...(incoming.controls?.bindings ?? {}) },
+    },
+    accessibility: { ...base.accessibility, ...(incoming.accessibility ?? {}) },
+  };
 }

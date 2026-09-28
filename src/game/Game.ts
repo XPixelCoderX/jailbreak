@@ -1,13 +1,20 @@
 import {
   ACESFilmicToneMapping,
   Color,
+  PCFShadowMap,
+  PCFSoftShadowMap,
   PerspectiveCamera,
+  Quaternion,
   Raycaster,
   Scene,
   Vector2,
   Vector3,
   WebGLRenderer,
+  type Texture,
 } from 'three';
+import { PMREMGenerator } from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { PostFX } from '../render/PostFX';
 import { AudioManager, type MusicState } from '../audio/AudioManager';
 import {
   CHASE_MUSIC_RADIUS,
@@ -19,6 +26,7 @@ import {
 } from '../config/constants';
 import { InputManager } from '../core/InputManager';
 import { SaveManager } from '../core/SaveManager';
+
 import { Suppressor } from '../enemies/Suppressor';
 import { GameLoop } from './GameLoop';
 import { GameState } from './GameState';
@@ -66,6 +74,12 @@ export class Game {
   private readonly pointer = new Vector2();
   private readonly eventSystem = new EventSystem();
   private readonly menuCamera = new PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 120);
+  private readonly tempVecA = new Vector3();
+  private readonly tempVecB = new Vector3();
+  private readonly tempRight = new Vector3();
+  private readonly tempQuat = new Quaternion();
+  private postfx: PostFX | null = null;
+  private environmentTexture: Texture | null = null;
   private readonly root: HTMLElement;
   private settings: GameSettings;
   private previousState: GameState = GameState.MAIN_MENU;
@@ -360,8 +374,22 @@ export class Game {
     this.renderer.outputColorSpace = this.terminalRenderer.outputColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.setClearColor(new Color(0x03060b), 1);
+    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.renderer.setClearColor(new Color(0x0a1018), 1);
     this.renderer.domElement.tabIndex = 0;
+
+    // Image-based lighting probe: gives metals, glass and wet surfaces
+    // convincing reflections and a soft "global illumination" feel.
+    try {
+      const pmrem = new PMREMGenerator(this.renderer);
+      this.environmentTexture?.dispose();
+      this.environmentTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+    } catch (error) {
+      console.warn('Environment probe unavailable, falling back to ambient lighting.', error);
+    }
+
+    this.postfx = new PostFX(this.renderer, this.scene, this.menuCamera);
     this.onResize();
   }
 
@@ -423,14 +451,16 @@ export class Game {
 
   private buildWorld(): void {
     this.scene = new Scene();
-    this.scene.background = new Color(0x03060b);
-    this.facility = new Facility(this.scene);
+    this.scene.background = new Color(0x0a1018);
+    this.scene.environment = this.environmentTexture;
+    this.facility = new Facility(this.scene, this.audio);
     this.player = new Player();
     this.suppressor = new Suppressor();
     this.suppressor.reset(this.facility);
     this.scene.add(this.player.body, this.suppressor.root);
     this.menuCamera.position.set(17, 1.8, 8);
     this.menuCamera.lookAt(22, 1.5, 0);
+    this.postfx?.setScene(this.scene);
     this.applySettings(this.settings);
   }
 
@@ -732,17 +762,19 @@ export class Game {
     }
 
     this.ui.updateSubtitles(dt);
-    this.render();
+    this.render(dt);
     this.input.endFrame(this.settings);
   }
 
   private updateMenu(dt: number, now: number): void {
+    this.facility.setListener(this.menuCamera.position);
     this.facility.update(dt, now, this.progress, this.puzzles);
     this.menuCamera.position.set(20 + Math.sin(now * 0.16) * 9, 1.9 + Math.sin(now * 0.3) * 0.1, 6 + Math.cos(now * 0.18) * 5);
     this.menuCamera.lookAt(22 + Math.sin(now * 0.1) * 3, 1.5, 0);
   }
 
   private updateCutscene(dt: number): void {
+    this.facility.setListener(this.player.position);
     this.facility.update(dt, performance.now() * 0.001, this.progress, this.puzzles);
 
     if (this.progress.introComplete) {
@@ -771,6 +803,7 @@ export class Game {
 
   private updateGameplay(dt: number, now: number): void {
     this.player.update(dt, this.input, this.facility, this.audio, this.settings);
+    this.facility.setListener(this.player.position);
     this.facility.update(dt, now, this.progress, this.puzzles);
     this.updateAutomaticDoors();
     this.updateInteractions();
@@ -791,8 +824,9 @@ export class Game {
     const distance = this.suppressor.active ? this.suppressor.getDistanceToPlayer(this.player) : 99;
     this.audio.update(dt, this.player.fear + Math.max(0, 1 - distance / 18) * 0.5, healthRatio);
     this.audio.setMusicState(this.getMusicState(distance));
+    this.audio.setDangerTension(Math.max(0, 1 - distance / 15));
     if (distance < 18 && Math.random() < dt * 1.2) {
-      this.audio.playEnemyPresence(distance);
+      this.audio.playEnemyPresence(distance, this.getPanForPosition(this.suppressor.root.position));
     }
 
     this.ui.updateHUD({
@@ -942,10 +976,15 @@ export class Game {
     };
   }
 
-  private render(): void {
+  private render(dt: number): void {
     const useMenuCamera = this.state === GameState.MAIN_MENU || (this.previousState === GameState.MAIN_MENU && (this.state === GameState.SETTINGS || this.overlayKind === 'save-load'));
     const activeCamera = useMenuCamera ? this.menuCamera : this.player.camera;
-    this.renderer.render(this.scene, activeCamera);
+    this.updateAudioListener(activeCamera);
+    if (this.postfx) {
+      this.postfx.render(dt, this.scene, activeCamera);
+    } else {
+      this.renderer.render(this.scene, activeCamera);
+    }
     const cameraId = this.ui.getSelectedCamera();
     if (cameraId) {
       const feed = this.facility.cameras.get(cameraId);
@@ -960,6 +999,7 @@ export class Game {
     const width = window.innerWidth;
     const height = window.innerHeight;
     this.renderer.setSize(width, height);
+    this.postfx?.setSize(width, height);
     const aspect = width / height;
     this.player?.camera && (this.player.camera.aspect = aspect);
     this.player?.camera?.updateProjectionMatrix();
@@ -969,20 +1009,61 @@ export class Game {
 
   private applySettings(settings: GameSettings): void {
     this.settings = JSON.parse(JSON.stringify(settings)) as GameSettings;
+    const graphics = this.settings.graphics;
+    // Keep the legacy boolean in sync for older code paths and saves.
+    graphics.shadows = graphics.shadowQuality !== 'off';
     this.saveManager.saveSettings(this.settings);
     this.input.updateSettings(this.settings);
     this.audio.applySettings(this.settings);
     this.ui.applySettings(this.settings);
-    this.renderer.setPixelRatio(window.devicePixelRatio * this.settings.graphics.resolutionScale);
-    this.renderer.shadowMap.enabled = this.settings.graphics.shadows;
-    this.renderer.toneMappingExposure = this.settings.graphics.brightness;
-    this.renderer.domElement.style.imageRendering = this.settings.graphics.antialias ? 'auto' : 'pixelated';
+
+    this.renderer.setPixelRatio(window.devicePixelRatio * graphics.resolutionScale);
+    this.renderer.shadowMap.enabled = graphics.shadowQuality !== 'off';
+    this.renderer.shadowMap.type = graphics.shadowQuality === 'high' ? PCFSoftShadowMap : PCFShadowMap;
+    this.renderer.toneMappingExposure = graphics.brightness;
+    this.renderer.domElement.style.imageRendering = graphics.antialias ? 'auto' : 'pixelated';
+
     if (this.facility) {
-      this.scene.fog = this.settings.graphics.fog ? this.facility.sceneFog : null;
+      this.facility.applyGraphics(this.settings);
+      this.scene.fog = graphics.fog ? this.facility.sceneFog : null;
     }
     if (this.player) {
+      this.player.applyGraphics(this.settings);
       this.player.camera.fov = this.settings.accessibility.fov;
       this.player.camera.updateProjectionMatrix();
+    }
+    this.postfx?.applySettings(this.settings);
+    this.onResize();
+  }
+
+  /** Keeps the Web Audio listener aligned with the active camera. */
+  private updateAudioListener(camera: PerspectiveCamera): void {
+    const position = camera.getWorldPosition(this.tempVecA);
+    const right = this.tempVecB.set(1, 0, 0).applyQuaternion(camera.getWorldQuaternion(this.tempQuat));
+    this.audio.setListener(
+      { x: position.x, y: position.y, z: position.z },
+      { x: right.x, y: right.y, z: right.z },
+    );
+  }
+
+  /** Stereo pan (-1..1) of a world position relative to the active camera. */
+  public getPanForPosition(position: Vector3): number {
+    const camera = this.player ? this.player.camera : this.menuCamera;
+    const origin = camera.getWorldPosition(this.tempVecA);
+    const relative = this.tempVecB.copy(position).sub(origin);
+    const distance = relative.length();
+    if (distance < 0.001) {
+      return 0;
+    }
+    const right = this.tempRight.set(1, 0, 0).applyQuaternion(camera.getWorldQuaternion(this.tempQuat));
+    return Math.max(-1, Math.min(1, relative.dot(right) / distance));
+  }
+
+  /** Screen distortion + camera shake for supernatural moments. */
+  public triggerHorrorPulse(strength: number): void {
+    this.postfx?.pulse(strength);
+    if (this.settings.accessibility.screenShake) {
+      this.player?.addShake(strength * 1.4);
     }
   }
 
