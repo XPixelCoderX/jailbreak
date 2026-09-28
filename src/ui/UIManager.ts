@@ -12,6 +12,10 @@ interface TerminalRuntime {
 }
 
 export class UIManager {
+  public onHost: (() => void) | null = null;
+  public onJoin: ((code: string) => void) | null = null;
+  public onLeave: (() => void) | null = null;
+  public onChatSend: ((text: string) => void) | null = null;
   public onNewGame: (() => void) | null = null;
   public onContinue: (() => void) | null = null;
   public onOpenLoad: (() => void) | null = null;
@@ -495,7 +499,39 @@ export class UIManager {
     });
   }
 
+  public setMultiplayerStatus(text: string): void {
+    for (const id of ['multiplayer-status', 'chat-status']) {
+      const element = this.root.querySelector<HTMLElement>(`#${id}`);
+      if (element) element.textContent = text;
+    }
+  }
+
+  public addChat(text: string, sender: string): void {
+    const list = this.root.querySelector<HTMLElement>('#chat-messages')!;
+    const line = document.createElement('div');
+    const label = document.createElement('strong');
+    label.textContent = sender + '  ';
+    line.append(label, document.createTextNode(text));
+    list.append(line);
+    while (list.children.length > 50) list.firstElementChild?.remove();
+    list.scrollTop = list.scrollHeight;
+  }
+
   private bindMenu(): void {
+    this.root.querySelector('#multiplayer-button')!.addEventListener('click', () => this.root.querySelector('#multiplayer-panel')!.classList.remove('hidden'));
+    this.root.querySelector('#multiplayer-close')!.addEventListener('click', () => this.root.querySelector('#multiplayer-panel')!.classList.add('hidden'));
+    this.root.querySelector('#host-button')!.addEventListener('click', () => this.onHost?.());
+    this.root.querySelector('#join-form')!.addEventListener('submit', (event) => {
+      event.preventDefault();
+      this.onJoin?.(this.root.querySelector<HTMLInputElement>('#room-code')!.value.trim());
+    });
+    this.root.querySelector('#leave-button')!.addEventListener('click', () => this.onLeave?.());
+    this.root.querySelector<HTMLFormElement>('#chat-form')!.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const input = this.root.querySelector<HTMLInputElement>('#chat-input')!;
+      if (input.value.trim()) this.onChatSend?.(input.value.trim());
+      input.value = '';
+    });
     this.root.querySelector<HTMLButtonElement>('#new-game-button')!.addEventListener('click', () => this.onNewGame?.());
     this.root.querySelector<HTMLButtonElement>('#continue-button')!.addEventListener('click', () => this.onContinue?.());
     this.root.querySelector<HTMLButtonElement>('#load-game-button')!.addEventListener('click', () => this.onOpenLoad?.());
@@ -739,6 +775,7 @@ export class UIManager {
               <button id="new-game-button">NEW GAME</button>
               <button id="continue-button">CONTINUE</button>
               <button id="load-game-button">LOAD GAME</button>
+              <button id="multiplayer-button">MULTIPLAYER <span>↗</span></button>
               <button id="settings-button">SETTINGS</button>
               <button id="credits-button">CREDITS</button>
               <button id="quit-button">QUIT</button>
@@ -755,6 +792,24 @@ export class UIManager {
               <span>discord.gg/jqPt6a563h</span>
             </div>
           </div>
+        </section>
+
+        <section id="multiplayer-panel" class="modal hidden">
+          <div class="panel narrow">
+            <p class="eyebrow">COOPERATIVE CONNECTION / 02 PLAYERS</p>
+            <h2>Multiplayer</h2>
+            <p class="menu-help">Host a room and share its code, or enter a friend's code to join. Each player explores their own session; positions and chat are shared.</p>
+            <div id="multiplayer-status" class="connection-status">Not connected</div>
+            <button id="host-button">HOST A ROOM</button>
+            <form id="join-form" class="join-form"><input id="room-code" maxlength="6" placeholder="ROOM CODE" aria-label="Room code" autocomplete="off" required><button type="submit">JOIN ROOM</button></form>
+            <div class="panel-buttons horizontal"><button id="leave-button">DISCONNECT</button><button id="multiplayer-close">BACK</button></div>
+          </div>
+        </section>
+
+        <section id="chat-panel" class="hidden">
+          <div class="chat-heading">◉ COMMS <span id="chat-status">Not connected</span></div>
+          <div id="chat-messages" aria-live="polite"></div>
+          <form id="chat-form"><input id="chat-input" maxlength="240" placeholder="Message your partner…" aria-label="Chat message" autocomplete="off"><button type="submit">SEND</button></form>
         </section>
 
         <section id="hud" class="hidden">

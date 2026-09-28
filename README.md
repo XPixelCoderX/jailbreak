@@ -335,3 +335,7 @@ The required persistent links are implemented in the **main menu footer**:
 - **DISCORD** → `https://discord.gg/jqPt6a563h`
 
 They are rendered as actual clickable anchor elements.
+
+### Multiplayer (two players)
+
+Run `npm install && npm run dev` (or `npm run build && npm run preview`). The Vite server includes the WebSocket room relay at `/ws`; both players must open the **same server URL**. In the main menu select **Multiplayer**, host a room and share the six-character code. The second player selects **Multiplayer** and joins with that code. Both then start a game locally; player positions and text chat are shared. Chat stays available while playing. Rooms are limited to one host and one guest and close when the host disconnects. This is a lightweight presence/chat mode: world state, enemies, puzzles, inventory and saves are *not* synchronized. A static-only deployment cannot host the WebSocket relay; use a running Vite server for multiplayer.

@@ -671,3 +671,33 @@ h3 {
     bottom: 5rem;
   }
 }
+
+/* Containment console visual language */
+:root { --accent: #b9d8d8; --border: rgba(167,210,211,.23); --panel-strong: rgba(8,19,23,.97); }
+.screen-panel, .modal { background: radial-gradient(ellipse at 70% 20%, rgba(39,87,91,.22), transparent 60%), rgba(2,9,13,.78); backdrop-filter: blur(12px); }
+.menu-center { position: relative; padding: 3rem; border-left: 1px solid rgba(183,225,225,.22); text-align: left; width: min(650px, 90vw); background: linear-gradient(90deg,rgba(8,23,27,.8),transparent); }
+.menu-center::before { content: 'SCP / CONTAINMENT INTERFACE   •   001'; display: block; color: #78a9a9; letter-spacing: .25em; font-size: .7rem; margin-bottom: 3rem; }
+.menu-center h1 { font-weight: 300; line-height: .95; letter-spacing: .12em; text-shadow: 0 0 35px rgba(104,196,200,.4); }
+.menu-center .eyebrow { color: #a2b9b9; margin-bottom: 1rem; }
+.main-nav { margin-top: 3rem; width: min(410px,100%); gap: 0; }
+.main-nav button { text-align: left; border: 0; border-bottom: 1px solid rgba(160,201,203,.18); background: transparent; padding: 1rem .5rem; font-size: .84rem; letter-spacing: .22em; }
+.main-nav button::before { content: '◈'; margin-right: 1rem; color: #649499; }
+.main-nav button:hover, .main-nav button:focus-visible { background: rgba(104,181,186,.14); padding-left: 1.2rem; color: #fff; outline: none; }
+.main-nav button span { float: right; }
+.panel { border: 1px solid rgba(143,203,204,.3); border-top: 2px solid #83b8b8; box-shadow: 0 30px 90px #000b; padding: clamp(1.3rem, 3vw, 2.5rem); }
+.panel h2 { font-weight: 400; text-transform: uppercase; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+.panel button { background: rgba(88,154,160,.09); }
+.panel button:hover { background: rgba(88,154,160,.25); }
+.menu-help { color: #aabfc0; line-height: 1.6; font-size: .85rem; }
+.connection-status { padding: 1rem; border: 1px solid var(--border); color: #a9d0d0; background: #0b2024; font-size: .8rem; letter-spacing: .06em; }
+.join-form { display: flex; gap: .5rem; }
+.join-form input { min-width: 0; text-transform: uppercase; letter-spacing: .2em; }
+.join-form button { flex-shrink: 0; }
+#chat-panel { position: absolute; bottom: 1rem; left: 1rem; width: min(370px,calc(100vw - 2rem)); background: rgba(5,18,22,.88); border: 1px solid var(--border); padding: .8rem; z-index: 20; backdrop-filter: blur(10px); }
+.chat-heading { font-size: .75rem; letter-spacing: .18em; color: #aad7d7; display: flex; justify-content: space-between; gap: .5rem; }
+#chat-status { font-size: .65rem; letter-spacing: 0; color: #92aeb0; text-align: right; }
+#chat-messages { height: 110px; overflow-y: auto; font-size: .8rem; line-height: 1.5; margin: .6rem 0; overflow-wrap: anywhere; }
+#chat-messages strong { color: #9ec9cf; }
+#chat-form { display: flex; gap: .4rem; }
+#chat-form input { min-width: 0; }
+@media(max-height: 700px) { .menu-center { padding: 1rem 2rem; } .menu-center::before { margin-bottom: 1rem; } .main-nav { margin-top: 1rem; } .main-nav button { padding: .55rem; } .menu-footer { display: none; } }

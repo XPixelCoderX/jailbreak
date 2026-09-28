@@ -1,6 +1,11 @@
 import {
   ACESFilmicToneMapping,
   Color,
+  Group,
+  Mesh,
+  MeshStandardMaterial,
+  CylinderGeometry,
+  SphereGeometry,
   PCFShadowMap,
   PCFSoftShadowMap,
   PerspectiveCamera,
@@ -47,6 +52,7 @@ import type {
 } from '../types';
 import { cloneDefaultSettings } from '../types';
 import { UIManager } from '../ui/UIManager';
+import { Multiplayer } from '../network/Multiplayer';
 import { Facility } from '../world/Facility';
 
 interface PendingKeypad {
@@ -71,6 +77,9 @@ export class Game {
   public puzzles!: PuzzleState;
   public objectives: Objective[] = [];
 
+  private readonly multiplayer = new Multiplayer();
+  private readonly partner = new Group();
+  private networkTimer = 0;
   private readonly loop: GameLoop;
   private readonly raycaster = new Raycaster();
   private readonly pointer = new Vector2();
@@ -131,6 +140,18 @@ export class Game {
     this.terminalRenderer.setSize(480, 270, false);
     this.terminalRenderer.outputColorSpace = this.renderer.outputColorSpace;
 
+    const suit = new MeshStandardMaterial({ color: 0x638eaa, emissive: 0x122838 });
+    const body = new Mesh(new CylinderGeometry(0.28, 0.34, 1.2, 8), suit);
+    body.position.y = 0.85;
+    const head = new Mesh(new SphereGeometry(0.22, 10, 8), new MeshStandardMaterial({ color: 0xc6d9df }));
+    head.position.y = 1.62;
+    this.partner.add(body, head);
+    this.partner.visible = false;
+    this.scene.add(this.partner);
+    this.multiplayer.onStatus = (text) => this.ui.setMultiplayerStatus(text);
+    this.multiplayer.onChat = (text, sender) => this.ui.addChat(text, sender);
+    this.multiplayer.onPosition = (position, yaw) => { this.partner.position.set(position[0], position[1], position[2]); this.partner.rotation.y = yaw; this.partner.visible = true; };
+    this.multiplayer.onDisconnect = () => { this.partner.visible = false; this.ui.root.querySelector('#chat-panel')?.classList.add('hidden'); };
     this.bindUI();
     this.bindDOM();
     this.initialize().catch((error) => this.handleFatalError(error));
@@ -418,6 +439,10 @@ export class Game {
   }
 
   private bindUI(): void {
+    this.ui.onHost = () => { this.multiplayer.connect('host'); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
+    this.ui.onJoin = (code) => { this.multiplayer.connect('join', code); this.ui.root.querySelector('#chat-panel')?.classList.remove('hidden'); };
+    this.ui.onLeave = () => { this.multiplayer.disconnect(); this.ui.setMultiplayerStatus('Not connected'); };
+    this.ui.onChatSend = (text) => this.multiplayer.chat(text);
     this.ui.onNewGame = () => this.startNewGame();
     this.ui.onContinue = () => this.continueGame();
     this.ui.onOpenLoad = () => this.openSaveLoad('load');
@@ -478,7 +503,7 @@ export class Game {
     for (const monster of this.monsters) {
       monster.reset(this.facility);
     }
-    this.scene.add(this.player.body, this.suppressor.root, ...this.monsters.map((monster) => monster.root));
+    this.scene.add(this.player.body, this.partner, this.suppressor.root, ...this.monsters.map((monster) => monster.root));
     this.menuCamera.position.set(17, 1.8, 8);
     this.menuCamera.lookAt(22, 1.5, 0);
     this.postfx?.setScene(this.scene);
@@ -544,6 +569,7 @@ export class Game {
     this.input.exitPointerLock();
     this.ui.showLoading(false);
     this.ui.showMainMenu(true);
+    this.ui.root.querySelector('#multiplayer-panel')?.classList.add('hidden');
     this.ui.showPause(false);
     this.ui.showSettings(false);
     this.ui.showCredits(false);
@@ -793,6 +819,11 @@ export class Game {
     }
 
     this.handleGlobalInputs();
+    this.networkTimer += dt;
+    if (this.multiplayer.role && this.networkTimer >= 0.05 && this.player && this.state === GameState.PLAYING) {
+      this.networkTimer = 0;
+      this.multiplayer.sendPosition(this.player.position.toArray(), this.player.camera.rotation.y);
+    }
     const now = performance.now() * 0.001;
 
     const menuContext = this.state === GameState.MAIN_MENU || (this.previousState === GameState.MAIN_MENU && (this.state === GameState.SETTINGS || this.overlayKind === 'save-load'));
