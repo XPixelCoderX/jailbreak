@@ -338,6 +338,20 @@ h3 {
   font-size: 0.88rem;
 }
 
+.setting-note {
+  margin: -0.15rem 0 0.8rem;
+  color: var(--accent);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  letter-spacing: 0.03em;
+}
+
+.setting-note.muted {
+  color: var(--muted);
+  font-size: 0.74rem;
+  opacity: 0.85;
+}
+
 .hud-top-left,
 .hud-top-right {
   position: absolute;
@@ -368,6 +382,50 @@ h3 {
   display: block;
   margin-top: 0.15rem;
   letter-spacing: 0.08em;
+}
+
+.hud-top-right {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: min(30rem, 46vw);
+}
+
+.coords-block strong {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  color: #b9cbe4;
+}
+
+.hint-block {
+  min-width: 13rem;
+  max-width: 20rem;
+  text-align: right;
+}
+
+.hint-block ul {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.hint-block li {
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: rgba(224, 234, 247, 0.86);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+.hint-block li::before {
+  content: '\203A\00a0';
+  color: #7fb2ff;
+}
+
+#ending-panel p {
+  white-space: pre-line;
 }
 
 .flashlight-block em {

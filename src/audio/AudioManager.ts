@@ -22,6 +22,11 @@ export class AudioManager {
   private breathingTimer = 0;
   private heartbeatTimer = 0;
   private initialized = false;
+  private readonly buzzGain = this.context.createGain();
+  private readonly machineryGain = this.context.createGain();
+  private readonly tensionGain = this.context.createGain();
+  private readonly listenerPosition = { x: 0, y: 1.6, z: 0 };
+  private readonly listenerRight = { x: 1, y: 0, z: 0 };
 
   constructor(settings: GameSettings) {
     this.master.connect(this.context.destination);
@@ -30,6 +35,12 @@ export class AudioManager {
     this.ambient.connect(this.master);
     this.voice.connect(this.master);
     this.ui.connect(this.master);
+    this.buzzGain.gain.value = 0;
+    this.buzzGain.connect(this.ambient);
+    this.machineryGain.gain.value = 0;
+    this.machineryGain.connect(this.ambient);
+    this.tensionGain.gain.value = 0;
+    this.tensionGain.connect(this.ambient);
     this.applySettings(settings);
   }
 
@@ -146,16 +157,18 @@ export class AudioManager {
     this.playTone(this.voice, 780, 0.04, 0.2, 'triangle');
   }
 
-  public playDistortedWhisper(): void {
-    this.playNoiseHit(this.voice, 0.09, 0.25, 1800, 0.08);
-    this.playTone(this.voice, 130 + Math.random() * 60, 0.02, 0.18, 'sine');
+  public playDistortedWhisper(pan = 0): void {
+    const parent = this.pannedParent(this.voice, pan);
+    this.playNoiseHit(parent, 0.09, 0.25, 1800, 0.08);
+    this.playTone(parent, 130 + Math.random() * 60, 0.02, 0.18, 'sine');
   }
 
-  public playFootstepsInDistance(): void {
+  public playFootstepsInDistance(pan = 0): void {
+    const parent = this.pannedParent(this.ambient, pan);
     for (let index = 0; index < 3; index += 1) {
       const delay = index * 0.18;
       window.setTimeout(() => {
-        this.playNoiseHit(this.ambient, 0.05, 0.08, 320, 0.6);
+        this.playNoiseHit(parent, 0.05, 0.08, 320, 0.6);
       }, delay * 1000);
     }
   }
@@ -165,18 +178,20 @@ export class AudioManager {
     this.playTone(this.voice, 1600, 0.02, 0.12, 'square');
   }
 
-  public playMetalCreak(): void {
-    this.playTone(this.ambient, 120 + Math.random() * 40, 0.04, 0.4, 'sawtooth');
-    this.playNoiseHit(this.ambient, 0.06, 0.18, 600, 0.7);
+  public playMetalCreak(pan = 0): void {
+    const parent = this.pannedParent(this.ambient, pan);
+    this.playTone(parent, 120 + Math.random() * 40, 0.04, 0.4, 'sawtooth');
+    this.playNoiseHit(parent, 0.06, 0.18, 600, 0.7);
   }
 
-  public playEnemyPresence(distance: number): void {
+  public playEnemyPresence(distance: number, pan = 0): void {
     const amount = Math.max(0, 1 - distance / 18);
     if (amount <= 0) {
       return;
     }
-    this.playTone(this.ambient, 42 + Math.random() * 8, 0.03 + amount * 0.03, 0.22, 'sine');
-    this.playNoiseHit(this.ambient, 0.03 + amount * 0.05, 0.14, 280, 0.2);
+    const parent = this.pannedParent(this.ambient, pan);
+    this.playTone(parent, 42 + Math.random() * 8, 0.03 + amount * 0.03, 0.22, 'sine');
+    this.playNoiseHit(parent, 0.03 + amount * 0.05, 0.14, 280, 0.2);
   }
 
   private startAmbientLoops(): void {
@@ -184,6 +199,148 @@ export class AudioManager {
     this.createNoiseLoop(this.ambient, 0.028, 3800, 0.05);
     this.musicDrone = this.createOscillatorLoop(this.music, 'triangle', 70, 0);
     this.musicPulse = this.createOscillatorLoop(this.music, 'sine', 120, 0);
+
+    // Fluorescent ballast buzz (harsh 120 Hz harmonic + low hum)
+    const buzzOsc = this.context.createOscillator();
+    buzzOsc.type = 'square';
+    buzzOsc.frequency.value = 120;
+    const buzzFilter = this.context.createBiquadFilter();
+    buzzFilter.type = 'bandpass';
+    buzzFilter.frequency.value = 2400;
+    buzzFilter.Q.value = 5;
+    buzzOsc.connect(buzzFilter);
+    buzzFilter.connect(this.buzzGain);
+    const buzzLow = this.context.createOscillator();
+    buzzLow.type = 'sine';
+    buzzLow.frequency.value = 60;
+    const buzzLowGain = this.context.createGain();
+    buzzLowGain.gain.value = 0.5;
+    buzzLow.connect(buzzLowGain);
+    buzzLowGain.connect(this.buzzGain);
+    buzzOsc.start();
+    buzzLow.start();
+
+    // Distant ventilation / machinery rumble
+    this.createNoiseLoop(this.machineryGain, 0.5, 190, 0.8);
+    const rumble = this.context.createOscillator();
+    rumble.type = 'sine';
+    rumble.frequency.value = 46;
+    const rumbleGain = this.context.createGain();
+    rumbleGain.gain.value = 0.35;
+    rumble.connect(rumbleGain);
+    rumbleGain.connect(this.machineryGain);
+    rumble.start();
+
+    // Danger tension layer (breathy noise that swells near the Suppressor)
+    this.createNoiseLoop(this.tensionGain, 0.55, 950, 0.6);
+  }
+
+  /** Follows the camera so one-shots can be spatialized. */
+  public setListener(position: { x: number; y: number; z: number }, right: { x: number; y: number; z: number }): void {
+    this.listenerPosition.x = position.x;
+    this.listenerPosition.y = position.y;
+    this.listenerPosition.z = position.z;
+    const length = Math.hypot(right.x, right.y, right.z) || 1;
+    this.listenerRight.x = right.x / length;
+    this.listenerRight.y = right.y / length;
+    this.listenerRight.z = right.z / length;
+  }
+
+  /** 0..1 — loud electrical buzzing from nearby flickering fixtures. */
+  public setElectricalBuzz(level: number): void {
+    if (!this.initialized) {
+      return;
+    }
+    const now = this.context.currentTime;
+    this.buzzGain.gain.setTargetAtTime(Math.max(0, Math.min(1, level)) * 0.055, now, 0.12);
+  }
+
+  /** 0..1 — distant machinery / ventilation ambience. */
+  public setMachineryAmbience(level: number): void {
+    if (!this.initialized) {
+      return;
+    }
+    const now = this.context.currentTime;
+    this.machineryGain.gain.setTargetAtTime(Math.max(0, Math.min(1, level)) * 0.075, now, 0.35);
+  }
+
+  /** 0..1 — raises a breathing tension layer when danger is close. */
+  public setDangerTension(level: number): void {
+    if (!this.initialized) {
+      return;
+    }
+    const now = this.context.currentTime;
+    this.tensionGain.gain.setTargetAtTime(Math.max(0, Math.min(1, level)) * 0.05, now, 0.25);
+  }
+
+  private spatialGain(position: { x: number; y: number; z: number }): { gain: number; pan: number } {
+    const dx = position.x - this.listenerPosition.x;
+    const dy = position.y - this.listenerPosition.y;
+    const dz = position.z - this.listenerPosition.z;
+    const distance = Math.hypot(dx, dy, dz);
+    const gain = distance <= 0 ? 1 : Math.max(0, 1 - distance / 26) * (1 / (1 + distance * 0.05));
+    const pan = distance <= 0
+      ? 0
+      : (dx * this.listenerRight.x + dy * this.listenerRight.y + dz * this.listenerRight.z) / distance;
+    return { gain: Math.min(1.2, gain), pan: Math.max(-1, Math.min(1, pan)) * 0.85 };
+  }
+
+  private pannedParent(base: GainNode, pan: number): AudioNode {
+    if (Math.abs(pan) < 0.03) {
+      return base;
+    }
+    const panner = this.context.createStereoPanner();
+    panner.pan.value = pan;
+    panner.connect(base);
+    return panner;
+  }
+
+  public playPowerFailure(position?: { x: number; y: number; z: number }): void {
+    const spatial = position ? this.spatialGain(position) : { gain: 1, pan: 0 };
+    if (spatial.gain < 0.05) {
+      return;
+    }
+    const parent = this.pannedParent(this.ambient, spatial.pan);
+    this.playTone(parent, 240, 0.16 * spatial.gain, 1.3, 'sawtooth', 52);
+    this.playNoiseHit(parent, 0.24 * spatial.gain, 1.1, 720, 0.5);
+    window.setTimeout(() => {
+      this.playTone(parent, 72, 0.22 * spatial.gain, 0.3, 'square');
+      this.playNoiseHit(parent, 0.14 * spatial.gain, 0.35, 260, 1.2);
+    }, 720);
+  }
+
+  public playPowerRestore(position?: { x: number; y: number; z: number }): void {
+    const spatial = position ? this.spatialGain(position) : { gain: 1, pan: 0 };
+    if (spatial.gain < 0.05) {
+      return;
+    }
+    const parent = this.pannedParent(this.ambient, spatial.pan);
+    this.playTone(parent, 54, 0.13 * spatial.gain, 1.3, 'sawtooth', 168);
+    this.playNoiseHit(parent, 0.12 * spatial.gain, 1.2, 480, 0.5);
+    window.setTimeout(() => {
+      this.playTone(parent, 180, 0.06 * spatial.gain, 0.5, 'triangle');
+      this.playTone(parent, 270, 0.04 * spatial.gain, 0.6, 'triangle');
+    }, 950);
+  }
+
+  public playElectricSpark(position: { x: number; y: number; z: number }): void {
+    const spatial = this.spatialGain(position);
+    if (spatial.gain < 0.05) {
+      return;
+    }
+    const parent = this.pannedParent(this.sfx, spatial.pan);
+    this.playNoiseHit(parent, 0.16 * spatial.gain, 0.08, 5400, 1.1);
+    this.playNoiseHit(parent, 0.1 * spatial.gain, 0.05, 2600, 2);
+  }
+
+  public playWaterDrip(position: { x: number; y: number; z: number }): void {
+    const spatial = this.spatialGain(position);
+    if (spatial.gain < 0.06) {
+      return;
+    }
+    const parent = this.pannedParent(this.ambient, spatial.pan);
+    this.playTone(parent, 1750 + Math.random() * 500, 0.05 * spatial.gain, 0.08, 'sine');
+    this.playNoiseHit(parent, 0.035 * spatial.gain, 0.06, 2500, 3.5);
   }
 
   private createOscillatorLoop(parent: GainNode, type: OscillatorType, frequency: number, gainValue: number): LoopVoice {
@@ -226,7 +383,7 @@ export class AudioManager {
     return { source, gain };
   }
 
-  private playTone(parent: GainNode, frequency: number, gainValue: number, duration: number, type: OscillatorType): void {
+  private playTone(parent: AudioNode, frequency: number, gainValue: number, duration: number, type: OscillatorType, endFrequency?: number): void {
     if (this.context.state !== 'running') {
       return;
     }
@@ -238,6 +395,9 @@ export class AudioManager {
     filter.frequency.value = Math.max(400, frequency * 4);
     oscillator.type = type;
     oscillator.frequency.setValueAtTime(frequency, now);
+    if (endFrequency !== undefined && endFrequency > 0) {
+      oscillator.frequency.exponentialRampToValueAtTime(Math.max(1, endFrequency), now + duration);
+    }
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(gainValue, now + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
@@ -248,7 +408,7 @@ export class AudioManager {
     oscillator.stop(now + duration + 0.05);
   }
 
-  private playNoiseHit(parent: GainNode, gainValue: number, duration: number, frequency: number, q: number): void {
+  private playNoiseHit(parent: AudioNode, gainValue: number, duration: number, frequency: number, q: number): void {
     if (this.context.state !== 'running') {
       return;
     }

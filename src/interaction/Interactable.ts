@@ -114,8 +114,10 @@ export class Door extends BaseInteractable {
     this.openAmount = MathUtils.damp(this.openAmount, this.targetOpenAmount, this.openSpeed, dt);
     const direction = this.options.openOutward ? -1 : 1;
     this.panel.rotation.y = -Math.PI * 0.5 * this.openAmount * direction;
-    this.collider.enabled = this.openAmount < 0.72;
-    this.isOpen = this.openAmount > 0.7;
+    // Keep the solid collider up until the panel has genuinely swung clear of the
+    // opening (~80deg) so you can never walk through a door that still looks shut.
+    this.collider.enabled = this.openAmount < 0.86;
+    this.isOpen = this.openAmount > 0.84;
   }
 
   public canInteract(_game: Game): boolean {

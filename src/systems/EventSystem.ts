@@ -18,10 +18,11 @@ export class EventSystem {
       this.firstAnomalyDone = true;
       game.progress.introSightedSuppressor = true;
       const door = game.facility.triggerStrangeDoor();
-      game.audio.playMetalCreak();
+      game.audio.playMetalCreak(door ? game.getPanForPosition(door.object.position) : 0);
       game.queueSubtitle('UNKNOWN', '...hello?', 3.2);
       if (door) {
         game.ui.flashNotice('A heavy door slams somewhere behind you.');
+        game.triggerHorrorPulse(0.4);
       }
       this.cooldown = 14;
       return;
@@ -66,24 +67,35 @@ export class EventSystem {
         if (door) {
           game.audio.playDoor(true, false);
           game.notifyNoise(door.object.position, 0.8);
+          game.triggerHorrorPulse(0.3);
         }
         break;
       }
-      case 'footsteps':
-        game.audio.playFootstepsInDistance();
+      case 'footsteps': {
+        const pan = game.suppressor.active
+          ? game.getPanForPosition(game.suppressor.root.position)
+          : (Math.random() - 0.5) * 1.4;
+        game.audio.playFootstepsInDistance(pan);
         game.ui.pushSubtitle('[DISTANT FOOTSTEPS]', '', 2.4);
         break;
+      }
       case 'radio':
         game.audio.playRadioBurst();
         game.queueSubtitle('ANNOUNCEMENT', 'Containment failure persists. Avoid visual fixation. Seek routed power and core access.', 5.4);
         break;
-      case 'whisper':
-        game.audio.playDistortedWhisper();
+      case 'whisper': {
+        const pan = game.suppressor.active
+          ? game.getPanForPosition(game.suppressor.root.position)
+          : (Math.random() - 0.5) * 1.6;
+        game.audio.playDistortedWhisper(pan);
         game.queueSubtitle('UNKNOWN', 'Do you remember opening the door?', 3.7);
+        game.triggerHorrorPulse(0.35);
         break;
+      }
       case 'ambush':
         if (game.suppressor.active) {
           game.suppressor.triggerAmbush(game.player.position, game.facility);
+          game.triggerHorrorPulse(0.9);
         }
         break;
       default:

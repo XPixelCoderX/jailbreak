@@ -1,13 +1,20 @@
 import {
   ACESFilmicToneMapping,
   Color,
+  PCFShadowMap,
+  PCFSoftShadowMap,
   PerspectiveCamera,
+  Quaternion,
   Raycaster,
   Scene,
   Vector2,
   Vector3,
   WebGLRenderer,
+  type Texture,
 } from 'three';
+import { PMREMGenerator } from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { PostFX } from '../render/PostFX';
 import { AudioManager, type MusicState } from '../audio/AudioManager';
 import {
   CHASE_MUSIC_RADIUS,
@@ -19,7 +26,9 @@ import {
 } from '../config/constants';
 import { InputManager } from '../core/InputManager';
 import { SaveManager } from '../core/SaveManager';
+
 import { Suppressor } from '../enemies/Suppressor';
+import { Monster } from '../enemies/Monster';
 import { GameLoop } from './GameLoop';
 import { GameState } from './GameState';
 import type { Interactable } from '../interaction/Interactable';
@@ -57,6 +66,7 @@ export class Game {
   public facility!: Facility;
   public player!: Player;
   public suppressor!: Suppressor;
+  public monsters: Monster[] = [];
   public progress!: ProgressState;
   public puzzles!: PuzzleState;
   public objectives: Objective[] = [];
@@ -66,6 +76,12 @@ export class Game {
   private readonly pointer = new Vector2();
   private readonly eventSystem = new EventSystem();
   private readonly menuCamera = new PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 120);
+  private readonly tempVecA = new Vector3();
+  private readonly tempVecB = new Vector3();
+  private readonly tempRight = new Vector3();
+  private readonly tempQuat = new Quaternion();
+  private postfx: PostFX | null = null;
+  private environmentTexture: Texture | null = null;
   private readonly root: HTMLElement;
   private settings: GameSettings;
   private previousState: GameState = GameState.MAIN_MENU;
@@ -83,6 +99,9 @@ export class Game {
   private unlockedTerminals = new Set<string>();
   private pendingKeypad: PendingKeypad | null = null;
   private lastAutosaveLabel = 'Initial checkpoint';
+  private adaptiveScale = 1;
+  private adaptiveTimer = 0;
+  private runTime = 0;
 
   constructor(container: HTMLElement) {
     this.root = container;
@@ -208,6 +227,7 @@ export class Game {
     this.notifyNoise(this.player.position, 0.65);
     if (this.puzzles.coreSwitches.every(Boolean)) {
       this.queueSubtitle('CORE', 'Lattice restored. Final control unlocked.', 4.2);
+      this.setObjective('enterLevel3');
       this.ui.flashNotice('All three lattice switches are online. Use the core terminal.');
       this.lastAutosaveLabel = 'Suppression Core';
       this.saveGame(this.currentSaveSlot, true);
@@ -242,6 +262,10 @@ export class Game {
     this.ui.pushSubtitle(speaker, text, duration);
   }
 
+  public get objectiveId(): string {
+    return this.currentObjectiveId;
+  }
+
   public setObjective(id: keyof typeof OBJECTIVE_TEXT): void {
     const nextText = OBJECTIVE_TEXT[id];
     const current = this.objectives.find((objective) => objective.id === this.currentObjectiveId);
@@ -249,8 +273,12 @@ export class Game {
       current.completed = true;
     }
     this.currentObjectiveId = id;
-    const next = this.objectives.find((objective) => objective.id === id);
-    if (next) {
+    let next = this.objectives.find((objective) => objective.id === id);
+    if (!next) {
+      // Older save files predate this step: append it instead of losing it.
+      next = { id, title: nextText, completed: false };
+      this.objectives.push(next);
+    } else {
       next.completed = false;
     }
     this.ui.flashNotice(`Objective updated: ${nextText}`);
@@ -360,8 +388,22 @@ export class Game {
     this.renderer.outputColorSpace = this.terminalRenderer.outputColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.setClearColor(new Color(0x03060b), 1);
+    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.renderer.setClearColor(new Color(0x0a1018), 1);
     this.renderer.domElement.tabIndex = 0;
+
+    // Image-based lighting probe: gives metals, glass and wet surfaces
+    // convincing reflections and a soft "global illumination" feel.
+    try {
+      const pmrem = new PMREMGenerator(this.renderer);
+      this.environmentTexture?.dispose();
+      this.environmentTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+    } catch (error) {
+      console.warn('Environment probe unavailable, falling back to ambient lighting.', error);
+    }
+
+    this.postfx = new PostFX(this.renderer, this.scene, this.menuCamera);
     this.onResize();
   }
 
@@ -423,14 +465,23 @@ export class Game {
 
   private buildWorld(): void {
     this.scene = new Scene();
-    this.scene.background = new Color(0x03060b);
-    this.facility = new Facility(this.scene);
+    this.scene.background = new Color(0x0a1018);
+    this.scene.environment = this.environmentTexture;
+    this.facility = new Facility(this.scene, this.audio);
     this.player = new Player();
     this.suppressor = new Suppressor();
     this.suppressor.reset(this.facility);
-    this.scene.add(this.player.body, this.suppressor.root);
+    this.monsters = [
+      new Monster({ kind: 'watcher', zone: 'level2', spawnNode: 'l2-deck', patrolNodeIds: ['l2-deck', 'l2-hall', 'l2-door'] }),
+      new Monster({ kind: 'crawler', zone: 'level3', spawnNode: 'l3-core', patrolNodeIds: ['l3-core', 'l3-hall', 'shelter'] }),
+    ];
+    for (const monster of this.monsters) {
+      monster.reset(this.facility);
+    }
+    this.scene.add(this.player.body, this.suppressor.root, ...this.monsters.map((monster) => monster.root));
     this.menuCamera.position.set(17, 1.8, 8);
     this.menuCamera.lookAt(22, 1.5, 0);
+    this.postfx?.setScene(this.scene);
     this.applySettings(this.settings);
   }
 
@@ -466,9 +517,12 @@ export class Game {
       { id: 'leaveIntake', title: OBJECTIVE_TEXT.leaveIntake, completed: false },
       { id: 'restoreResearchPower', title: OBJECTIVE_TEXT.restoreResearchPower, completed: false },
       { id: 'accessResearch', title: OBJECTIVE_TEXT.accessResearch, completed: false },
+      { id: 'reachLevel2', title: OBJECTIVE_TEXT.reachLevel2, completed: false },
+      { id: 'recoverFootage', title: OBJECTIVE_TEXT.recoverFootage, completed: false },
       { id: 'unlockUnderground', title: OBJECTIVE_TEXT.unlockUnderground, completed: false },
       { id: 'findCoreKey', title: OBJECTIVE_TEXT.findCoreKey, completed: false },
       { id: 'reachCore', title: OBJECTIVE_TEXT.reachCore, completed: false },
+      { id: 'enterLevel3', title: OBJECTIVE_TEXT.enterLevel3, completed: false },
       { id: 'escape', title: OBJECTIVE_TEXT.escape, completed: false },
     ];
     this.currentObjectiveId = 'wake';
@@ -476,6 +530,11 @@ export class Game {
     this.unlockedTerminals.clear();
     this.eventSystem.reset();
     this.lastAutosaveLabel = 'Intake Chamber';
+    this.runTime = 0;
+    this.adaptiveScale = 1;
+    for (const monster of this.monsters) {
+      monster.reset(this.facility);
+    }
     this.facility.applyProgress(this.progress, this.puzzles);
   }
 
@@ -621,7 +680,7 @@ export class Game {
         break;
       case 'unlock-archive':
         this.progress.archiveCodeFound = true;
-        this.setObjective('unlockUnderground');
+        this.setObjective('reachLevel2');
         this.ui.flashNotice('Archive override code logged: 4138');
         this.lastAutosaveLabel = 'Research Terminal';
         this.saveGame(this.currentSaveSlot, true);
@@ -701,10 +760,13 @@ export class Game {
       ? `You restore the lattice, the Suppressor receding behind a veil of static as emergency shutters release the outbound route. ${evidenceBonus}`
       : `You overload the core and flee through an emergency shaft as the lower facility burns. The signal behind you screams and then vanishes. ${evidenceBonus}`;
 
+    const runMinutes = Math.floor(this.runTime / 60);
+    const runSeconds = Math.floor(this.runTime % 60).toString().padStart(2, '0');
+    const stats = `Survival time ${runMinutes}:${runSeconds} · Evidence recovered ${this.progress.evidenceCollected}.`;
     this.state = GameState.ENDING;
     this.input.exitPointerLock();
     this.ui.closeTerminal();
-    this.ui.showEnding(title, body);
+    this.ui.showEnding(title, `${body}\n\n${stats}`);
   }
 
   private update(dt: number): void {
@@ -714,6 +776,20 @@ export class Game {
       this.fpsValue = Math.round(this.fpsFrames / this.fpsAccumulator);
       this.fpsAccumulator = 0;
       this.fpsFrames = 0;
+    }
+
+    // Adaptive resolution: when the frame rate sags, quietly lower the internal
+    // render scale (and restore it when there is headroom again).
+    this.adaptiveTimer += dt;
+    if (this.adaptiveTimer >= 2.5) {
+      this.adaptiveTimer = 0;
+      if (this.fpsValue > 0 && this.fpsValue < 44 && this.adaptiveScale > 0.68) {
+        this.adaptiveScale = Math.max(0.68, this.adaptiveScale - 0.07);
+        this.applyResolution();
+      } else if (this.fpsValue > 57 && this.adaptiveScale < 1) {
+        this.adaptiveScale = Math.min(1, this.adaptiveScale + 0.04);
+        this.applyResolution();
+      }
     }
 
     this.handleGlobalInputs();
@@ -732,17 +808,19 @@ export class Game {
     }
 
     this.ui.updateSubtitles(dt);
-    this.render();
+    this.render(dt);
     this.input.endFrame(this.settings);
   }
 
   private updateMenu(dt: number, now: number): void {
+    this.facility.setListener(this.menuCamera.position);
     this.facility.update(dt, now, this.progress, this.puzzles);
     this.menuCamera.position.set(20 + Math.sin(now * 0.16) * 9, 1.9 + Math.sin(now * 0.3) * 0.1, 6 + Math.cos(now * 0.18) * 5);
     this.menuCamera.lookAt(22 + Math.sin(now * 0.1) * 3, 1.5, 0);
   }
 
   private updateCutscene(dt: number): void {
+    this.facility.setListener(this.player.position);
     this.facility.update(dt, performance.now() * 0.001, this.progress, this.puzzles);
 
     if (this.progress.introComplete) {
@@ -771,11 +849,16 @@ export class Game {
 
   private updateGameplay(dt: number, now: number): void {
     this.player.update(dt, this.input, this.facility, this.audio, this.settings);
+    this.facility.setListener(this.player.position);
     this.facility.update(dt, now, this.progress, this.puzzles);
     this.updateAutomaticDoors();
     this.updateInteractions();
     this.suppressor.update(dt, this.player, this.facility, this.settings);
+    for (const monster of this.monsters) {
+      monster.update(dt, this.player, this.facility, this);
+    }
     this.eventSystem.update(dt, this);
+    this.runTime += dt;
 
     const zoneId = this.facility.getZoneId(this.player.position);
     if (zoneId === 'lobby' && this.progress.flashlightFound && this.currentObjectiveId === 'leaveIntake') {
@@ -783,16 +866,30 @@ export class Game {
       this.lastAutosaveLabel = 'Main Lobby';
       this.saveGame(this.currentSaveSlot, true);
     }
+    if (zoneId === 'level2' && this.currentObjectiveId === 'reachLevel2') {
+      // The footage may already be in the bag from an early visit.
+      this.setObjective(this.player.inventory.has('footage-chamber-4') ? 'unlockUnderground' : 'recoverFootage');
+      this.lastAutosaveLabel = 'Observation Deck';
+      this.saveGame(this.currentSaveSlot, true);
+    }
+    if (zoneId === 'level3' && this.currentObjectiveId === 'enterLevel3') {
+      this.setObjective('escape');
+      this.queueSubtitle('SUIT', 'Storage is empty... whatever they kept down here is gone.', 4.2);
+      this.lastAutosaveLabel = 'Level 3 Storage';
+      this.saveGame(this.currentSaveSlot, true);
+    }
     if (zoneId === 'core' && this.progress.coreKeyFound) {
       this.progress.coreEntered = true;
     }
 
     const healthRatio = 1 - this.player.health / 100;
-    const distance = this.suppressor.active ? this.suppressor.getDistanceToPlayer(this.player) : 99;
+    const threat = this.getNearestThreat();
+    const distance = threat ? threat.distance : 99;
     this.audio.update(dt, this.player.fear + Math.max(0, 1 - distance / 18) * 0.5, healthRatio);
     this.audio.setMusicState(this.getMusicState(distance));
-    if (distance < 18 && Math.random() < dt * 1.2) {
-      this.audio.playEnemyPresence(distance);
+    this.audio.setDangerTension(Math.max(0, 1 - distance / 15));
+    if (distance < 18 && threat && Math.random() < dt * 1.2) {
+      this.audio.playEnemyPresence(distance, this.getPanForPosition(threat.position));
     }
 
     this.ui.updateHUD({
@@ -802,6 +899,9 @@ export class Game {
       stamina: this.player.stamina,
       zone: this.facility.getZoneName(this.player.position),
       objective: this.objectives.find((objective) => objective.id === this.currentObjectiveId)?.title ?? OBJECTIVE_TEXT.wake,
+      hints: this.collectHints(zoneId),
+      coordinates: `${this.player.position.x.toFixed(1)} / ${this.player.position.y.toFixed(1)} / ${this.player.position.z.toFixed(1)}`,
+      showCoordinates: this.settings.accessibility.coordinates,
     });
     this.ui.setOverlayEffects(this.player.fear, healthRatio, this.settings.graphics.brightness, this.settings.graphics.effects);
 
@@ -811,6 +911,83 @@ export class Game {
       this.ui.showDeath(true);
       this.audio.setMusicState('danger');
     }
+  }
+
+  private getNearestThreat(): { distance: number; position: Vector3 } | null {
+    let best: { distance: number; position: Vector3 } | null = null;
+    if (this.suppressor?.active) {
+      best = { distance: this.suppressor.getDistanceToPlayer(this.player), position: this.suppressor.root.position };
+    }
+    for (const monster of this.monsters) {
+      if (!monster.active) {
+        continue;
+      }
+      const distance = monster.getDistanceToPlayer(this.player);
+      if (!best || distance < best.distance) {
+        best = { distance, position: monster.root.position };
+      }
+    }
+    return best;
+  }
+
+  /** Short contextual tips for the top-right hint stack (max 3, most urgent first). */
+  private collectHints(zoneId: string): string[] {
+    const hints: string[] = [];
+    const threat = this.getNearestThreat();
+    if (threat && threat.distance < 9) {
+      hints.push('Danger is close — crouch (CTRL) and break line of sight.');
+    } else if (this.player.hiddenSpot) {
+      hints.push('Stay still while hidden — they hunt by movement and sound.');
+    }
+    if (!this.progress.flashlightFound) {
+      hints.push('Search the room — something on the shelf is glinting.');
+    } else if (this.player.flashlightOn && this.player.flashlightBattery <= 25) {
+      hints.push('Battery low — find an industrial battery (yellow) or a wall charger.');
+    }
+    switch (this.currentObjectiveId) {
+      case 'restoreResearchPower':
+        hints.push(this.player.inventory.has('fuse-main')
+          ? 'Fuse in hand — seat it in ROUTING PANEL B in Maintenance.'
+          : 'Maintenance: throw the three breakers and find the missing fuse.');
+        break;
+      case 'accessResearch':
+        hints.push('Research is powered — the terminal waits at the back of the lab.');
+        break;
+      case 'reachLevel2':
+        hints.push(this.player.inventory.has('keycard-level-2')
+          ? 'Level 2 card in hand — the sealed door is north of Security.'
+          : 'The Level 2 card is filed at the Security desk.');
+        break;
+      case 'recoverFootage':
+        hints.push('The Chamber 4 footage sits on a desk in the Observation Deck.');
+        break;
+      case 'unlockUnderground':
+        hints.push(this.progress.archiveCodeFound
+          ? 'Archive code 4138 — enter it at the blast keypad by the tunnel.'
+          : 'Find the archive code in the Research notes.');
+        break;
+      case 'findCoreKey':
+        hints.push('The Suppression Core keycard is somewhere in the Underground.');
+        break;
+      case 'reachCore':
+        hints.push('The Level 3 card is kept in the lower shelter.');
+        break;
+      case 'enterLevel3':
+        hints.push('Descend through the shelter — Level 3 storage lies south.');
+        break;
+      case 'escape':
+        hints.push('Choose stabilize or purge at the core terminal, then get out.');
+        break;
+      default:
+        break;
+    }
+    if (hints.length < 2) {
+      hints.push('TAB inventory · F lamp · SHIFT sprint · CTRL crouch');
+    }
+    if (hints.length < 2 && zoneId === 'lobby') {
+      hints.push('East doors: Maintenance (south) and Research (north).');
+    }
+    return hints.slice(0, 3);
   }
 
   private updateAutomaticDoors(): void {
@@ -891,7 +1068,7 @@ export class Game {
       this.ui.flashNotice(`Enemy debug ${this.showEnemyDebug ? 'enabled' : 'disabled'}.`);
     }
     if (this.input.consumeActionPress('teleportDebug') && this.showDebug) {
-      const zones = [new Vector3(20, 0, 0), new Vector3(34, 0, 18), new Vector3(48, 0, -6), new Vector3(74, 0, 8), new Vector3(104, 0, -6)];
+      const zones = [new Vector3(20, 0, 0), new Vector3(34, 0, 18), new Vector3(48, 0, -6), new Vector3(74, 0, 8), new Vector3(104, 0, -6), new Vector3(20, 0, -34), new Vector3(74, 0, 27)];
       const index = Math.floor(Math.random() * zones.length);
       this.player.position.copy(zones[index]);
       this.ui.flashNotice('Debug teleport executed.');
@@ -942,10 +1119,15 @@ export class Game {
     };
   }
 
-  private render(): void {
+  private render(dt: number): void {
     const useMenuCamera = this.state === GameState.MAIN_MENU || (this.previousState === GameState.MAIN_MENU && (this.state === GameState.SETTINGS || this.overlayKind === 'save-load'));
     const activeCamera = useMenuCamera ? this.menuCamera : this.player.camera;
-    this.renderer.render(this.scene, activeCamera);
+    this.updateAudioListener(activeCamera);
+    if (this.postfx) {
+      this.postfx.render(dt, this.scene, activeCamera);
+    } else {
+      this.renderer.render(this.scene, activeCamera);
+    }
     const cameraId = this.ui.getSelectedCamera();
     if (cameraId) {
       const feed = this.facility.cameras.get(cameraId);
@@ -956,10 +1138,17 @@ export class Game {
     }
   }
 
+  private applyResolution(): void {
+    const scale = this.settings.graphics.resolutionScale;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * scale * this.adaptiveScale);
+    this.onResize();
+  }
+
   private onResize(): void {
     const width = window.innerWidth;
     const height = window.innerHeight;
     this.renderer.setSize(width, height);
+    this.postfx?.setSize(width, height);
     const aspect = width / height;
     this.player?.camera && (this.player.camera.aspect = aspect);
     this.player?.camera?.updateProjectionMatrix();
@@ -969,20 +1158,61 @@ export class Game {
 
   private applySettings(settings: GameSettings): void {
     this.settings = JSON.parse(JSON.stringify(settings)) as GameSettings;
+    const graphics = this.settings.graphics;
+    // Keep the legacy boolean in sync for older code paths and saves.
+    graphics.shadows = graphics.shadowQuality !== 'off';
     this.saveManager.saveSettings(this.settings);
     this.input.updateSettings(this.settings);
     this.audio.applySettings(this.settings);
     this.ui.applySettings(this.settings);
-    this.renderer.setPixelRatio(window.devicePixelRatio * this.settings.graphics.resolutionScale);
-    this.renderer.shadowMap.enabled = this.settings.graphics.shadows;
-    this.renderer.toneMappingExposure = this.settings.graphics.brightness;
-    this.renderer.domElement.style.imageRendering = this.settings.graphics.antialias ? 'auto' : 'pixelated';
+
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * graphics.resolutionScale * this.adaptiveScale);
+    this.renderer.shadowMap.enabled = graphics.shadowQuality !== 'off';
+    this.renderer.shadowMap.type = graphics.shadowQuality === 'high' ? PCFSoftShadowMap : PCFShadowMap;
+    this.renderer.toneMappingExposure = graphics.brightness;
+    this.renderer.domElement.style.imageRendering = graphics.antialias ? 'auto' : 'pixelated';
+
     if (this.facility) {
-      this.scene.fog = this.settings.graphics.fog ? this.facility.sceneFog : null;
+      this.facility.applyGraphics(this.settings);
+      this.scene.fog = graphics.fog ? this.facility.sceneFog : null;
     }
     if (this.player) {
+      this.player.applyGraphics(this.settings);
       this.player.camera.fov = this.settings.accessibility.fov;
       this.player.camera.updateProjectionMatrix();
+    }
+    this.postfx?.applySettings(this.settings);
+    this.onResize();
+  }
+
+  /** Keeps the Web Audio listener aligned with the active camera. */
+  private updateAudioListener(camera: PerspectiveCamera): void {
+    const position = camera.getWorldPosition(this.tempVecA);
+    const right = this.tempVecB.set(1, 0, 0).applyQuaternion(camera.getWorldQuaternion(this.tempQuat));
+    this.audio.setListener(
+      { x: position.x, y: position.y, z: position.z },
+      { x: right.x, y: right.y, z: right.z },
+    );
+  }
+
+  /** Stereo pan (-1..1) of a world position relative to the active camera. */
+  public getPanForPosition(position: Vector3): number {
+    const camera = this.player ? this.player.camera : this.menuCamera;
+    const origin = camera.getWorldPosition(this.tempVecA);
+    const relative = this.tempVecB.copy(position).sub(origin);
+    const distance = relative.length();
+    if (distance < 0.001) {
+      return 0;
+    }
+    const right = this.tempRight.set(1, 0, 0).applyQuaternion(camera.getWorldQuaternion(this.tempQuat));
+    return Math.max(-1, Math.min(1, relative.dot(right) / distance));
+  }
+
+  /** Screen distortion + camera shake for supernatural moments. */
+  public triggerHorrorPulse(strength: number): void {
+    this.postfx?.pulse(strength);
+    if (this.settings.accessibility.screenShake) {
+      this.player?.addShake(strength * 1.4);
     }
   }
 

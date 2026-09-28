@@ -1,4 +1,5 @@
-import { GAME_TITLE, LINKS } from '../config/constants';
+import { GAME_TITLE, LINKS, MAX_BRIGHTNESS, type QualityLevel } from '../config/constants';
+import { getPreset, QUALITY_PRESETS } from '../render/QualityPresets';
 import type { InputManager, ActionName } from '../core/InputManager';
 import type { SaveSlotSummary } from '../core/SaveManager';
 import type { DebugInfo, GameSettings, InventoryItemData, Objective, SecurityCameraDefinition, TerminalDefinition } from '../types';
@@ -85,6 +86,12 @@ export class UIManager {
   private readonly healthValue: HTMLDivElement;
   private readonly staminaValue: HTMLDivElement;
   private readonly zoneValue: HTMLDivElement;
+  private readonly hintBlock: HTMLDivElement;
+  private readonly hintList: HTMLUListElement;
+  private readonly coordsBlock: HTMLDivElement;
+  private readonly coordValue: HTMLDivElement;
+  private hintsEnabled = true;
+  private lastHintKey = '';
 
   private subtitleTimer = 0;
   private saveMode: 'save' | 'load' = 'load';
@@ -142,6 +149,10 @@ export class UIManager {
     this.healthValue = this.root.querySelector<HTMLDivElement>('#health-value')!;
     this.staminaValue = this.root.querySelector<HTMLDivElement>('#stamina-value')!;
     this.zoneValue = this.root.querySelector<HTMLDivElement>('#zone-value')!;
+    this.hintBlock = this.root.querySelector<HTMLDivElement>('#hint-block')!;
+    this.hintList = this.root.querySelector<HTMLUListElement>('#hint-list')!;
+    this.coordsBlock = this.root.querySelector<HTMLDivElement>('#coords-block')!;
+    this.coordValue = this.root.querySelector<HTMLDivElement>('#coord-value')!;
 
     this.bindMenu();
     this.buildSettingsPanel(settings);
@@ -222,13 +233,33 @@ export class UIManager {
       .join('');
   }
 
-  public updateHUD(values: { battery: number; lowBattery: boolean; health: number; stamina: number; zone: string; objective: string }): void {
+  public updateHUD(values: {
+    battery: number;
+    lowBattery: boolean;
+    health: number;
+    stamina: number;
+    zone: string;
+    objective: string;
+    hints: string[];
+    coordinates: string;
+    showCoordinates: boolean;
+  }): void {
     this.batteryValue.textContent = `${Math.round(values.battery)}%`;
     this.batteryLow.classList.toggle('hidden', !values.lowBattery);
     this.healthValue.textContent = `${Math.round(values.health)}%`;
     this.staminaValue.textContent = `${Math.round(values.stamina)}%`;
     this.zoneValue.textContent = values.zone;
     this.objective.textContent = values.objective;
+    this.hintBlock.classList.toggle('hidden', !this.hintsEnabled);
+    const hintKey = values.hints.join(' | ');
+    if (this.hintsEnabled && hintKey !== this.lastHintKey) {
+      this.lastHintKey = hintKey;
+      this.hintList.innerHTML = values.hints.map((hint) => `<li>${hint}</li>`).join('');
+    }
+    this.coordsBlock.classList.toggle('hidden', !values.showCoordinates);
+    if (values.showCoordinates) {
+      this.coordValue.textContent = values.coordinates;
+    }
   }
 
   public setPrompt(text: string | null): void {
@@ -373,6 +404,17 @@ export class UIManager {
 
   public applySettings(settings: GameSettings): void {
     this.pendingSettings = JSON.parse(JSON.stringify(settings)) as GameSettings;
+    this.refreshSettingsInputs();
+    this.setSubtitleScale(settings.accessibility.subtitleSize);
+    this.hintsEnabled = settings.accessibility.hints !== false;
+    const note = this.root.querySelector<HTMLParagraphElement>('#quality-note');
+    if (note) {
+      const preset = getPreset(settings.graphics.quality);
+      note.textContent = `${preset.label} — ${preset.description}`;
+    }
+  }
+
+  private refreshSettingsInputs(): void {
     for (const [key, input] of this.settingsInputs) {
       const value = this.getSettingByPath(key, this.pendingSettings);
       if (input instanceof HTMLInputElement && input.type === 'checkbox') {
@@ -381,7 +423,6 @@ export class UIManager {
         input.value = String(value);
       }
     }
-    this.setSubtitleScale(settings.accessibility.subtitleSize);
   }
 
   private renderTerminal(): void {
@@ -527,25 +568,81 @@ export class UIManager {
       container.append(row);
     };
 
-    const addSelect = (container: HTMLElement, label: string, path: string, options: string[]): void => {
+    const addSelect = (
+      container: HTMLElement,
+      label: string,
+      path: string,
+      options: Array<string | [string, string]>,
+      onChange?: (value: string) => void,
+    ): void => {
       const value = this.getSettingByPath(path, settings);
+      const normalized = options.map((option) => (Array.isArray(option) ? option : [option, option.toUpperCase()] as [string, string]));
       const row = document.createElement('label');
       row.className = 'setting-row';
-      row.innerHTML = `<span>${label}</span><select data-path="${path}">${options.map((option) => `<option value="${option}" ${option === value ? 'selected' : ''}>${option}</option>`).join('')}</select>`;
+      row.innerHTML = `<span>${label}</span><select data-path="${path}">${normalized.map(([optionValue, optionLabel]) => `<option value="${optionValue}" ${optionValue === value ? 'selected' : ''}>${optionLabel}</option>`).join('')}</select>`;
       const select = row.querySelector<HTMLSelectElement>('select')!;
-      select.addEventListener('change', () => this.setSettingByPath(path, select.value));
+      select.addEventListener('change', () => {
+        this.setSettingByPath(path, select.value);
+        onChange?.(select.value);
+      });
       this.settingsInputs.set(path, select);
       container.append(row);
     };
 
-    addSelect(graphicsContainer, 'Quality', 'graphics.quality', ['low', 'medium', 'high']);
+    // Six quality tiers — picking one seeds every granular option below so
+    // players can still fine-tune each value afterwards.
+    addSelect(
+      graphicsContainer,
+      'Quality',
+      'graphics.quality',
+      [
+        ['low', 'LOW'],
+        ['medium', 'MEDIUM'],
+        ['high', 'HIGH'],
+        ['ultra', 'ULTRA'],
+        ['extreme', 'EXTREME'],
+        ['rtx', 'RTX · RAY-TRACED STYLE'],
+      ],
+      (value) => {
+        const preset = QUALITY_PRESETS[value as QualityLevel] ?? QUALITY_PRESETS.high;
+        this.setSettingByPath('graphics.shadowQuality', preset.shadowQuality);
+        this.setSettingByPath('graphics.lightingQuality', preset.lightingQuality);
+        this.setSettingByPath('graphics.reflectionQuality', preset.reflectionQuality);
+        this.setSettingByPath('graphics.postProcessing', preset.postProcessing);
+        this.setSettingByPath('graphics.bloom', preset.bloom);
+        this.setSettingByPath('graphics.ambientOcclusion', preset.ambientOcclusion);
+        this.setSettingByPath('graphics.volumetrics', preset.volumetrics);
+        this.refreshSettingsInputs();
+        const note = this.root.querySelector<HTMLParagraphElement>('#quality-note');
+        if (note) {
+          note.textContent = `${preset.label} — ${preset.description}`;
+        }
+      },
+    );
+    const qualityNote = document.createElement('p');
+    qualityNote.className = 'setting-note';
+    qualityNote.id = 'quality-note';
+    qualityNote.textContent = `${getPreset(settings.graphics.quality).label} — ${getPreset(settings.graphics.quality).description}`;
+    graphicsContainer.append(qualityNote);
+    const rtxNote = document.createElement('p');
+    rtxNote.className = 'setting-note muted';
+    rtxNote.textContent = 'RTX tier = ray-traced style approximations (SSR, planar wet-floor mirrors, IBL probes, GTAO, volumetric shafts). No hardware ray tracing is required or claimed.';
+    graphicsContainer.append(rtxNote);
+
+    addSelect(graphicsContainer, 'Shadow Quality', 'graphics.shadowQuality', [['off', 'OFF'], ['low', 'LOW'], ['medium', 'MEDIUM'], ['high', 'HIGH']]);
+    addSelect(graphicsContainer, 'Lighting Quality', 'graphics.lightingQuality', [['low', 'LOW'], ['medium', 'MEDIUM'], ['high', 'HIGH']]);
+    addSelect(graphicsContainer, 'Reflection Quality', 'graphics.reflectionQuality', [['off', 'OFF'], ['low', 'ENVIRONMENT'], ['medium', '+ WET FLOOR'], ['high', '+ SCREEN-SPACE']]);
+    addToggle(graphicsContainer, 'Post-Processing', 'graphics.postProcessing');
+    addToggle(graphicsContainer, 'Bloom', 'graphics.bloom');
+    addToggle(graphicsContainer, 'Ambient Occlusion', 'graphics.ambientOcclusion');
+    addToggle(graphicsContainer, 'Volumetric Lights', 'graphics.volumetrics');
     addRange(graphicsContainer, 'Resolution Scaling', 'graphics.resolutionScale', 0.5, 1.25, 0.05);
-    addToggle(graphicsContainer, 'Shadows', 'graphics.shadows');
     addRange(graphicsContainer, 'View Distance', 'graphics.viewDistance', 0.7, 1.5, 0.05);
     addToggle(graphicsContainer, 'Effects', 'graphics.effects');
     addToggle(graphicsContainer, 'Fog', 'graphics.fog');
+    addRange(graphicsContainer, 'Fog Density', 'graphics.fogDensity', 0, 1.5, 0.05);
     addToggle(graphicsContainer, 'Anti-aliasing', 'graphics.antialias');
-    addRange(graphicsContainer, 'Brightness', 'graphics.brightness', 0.7, 1.35, 0.01);
+    addRange(graphicsContainer, 'Brightness', 'graphics.brightness', 0.7, MAX_BRIGHTNESS, 0.01);
 
     addRange(audioContainer, 'Master Volume', 'audio.master', 0, 1, 0.01);
     addRange(audioContainer, 'Music Volume', 'audio.music', 0, 1, 0.01);
@@ -564,6 +661,8 @@ export class UIManager {
     addRange(accessibilityContainer, 'Subtitle Size', 'accessibility.subtitleSize', 0.8, 1.4, 0.05);
     addToggle(accessibilityContainer, 'Screen Shake', 'accessibility.screenShake');
     addToggle(accessibilityContainer, 'Flash Effects', 'accessibility.flashEffects');
+    addToggle(accessibilityContainer, 'Context Hints (top right)', 'accessibility.hints');
+    addToggle(accessibilityContainer, 'XYZ Coordinates', 'accessibility.coordinates');
     addRange(accessibilityContainer, 'Field of View', 'accessibility.fov', 60, 110, 1);
 
     this.root.querySelector<HTMLButtonElement>('#settings-apply-button')!.addEventListener('click', () => this.onApplySettings?.(this.pendingSettings));
@@ -678,6 +777,14 @@ export class UIManager {
             <div class="hud-block">
               <span class="label">ZONE</span>
               <strong id="zone-value">Intake Chamber</strong>
+            </div>
+            <div class="hud-block coords-block hidden" id="coords-block">
+              <span class="label">XYZ</span>
+              <strong id="coord-value">0.0 / 0.0 / 0.0</strong>
+            </div>
+            <div class="hud-block hint-block" id="hint-block">
+              <span class="label">HINTS</span>
+              <ul id="hint-list"></ul>
             </div>
           </div>
           <div id="objective-hud" class="hud-objective">

@@ -44,16 +44,37 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   teleportDebug: 'F5',
 };
 
+export type QualityLevel = 'low' | 'medium' | 'high' | 'ultra' | 'extreme' | 'rtx';
+export type ShadowQualityLevel = 'off' | 'low' | 'medium' | 'high';
+export type LightingQualityLevel = 'low' | 'medium' | 'high';
+export type ReflectionQualityLevel = 'off' | 'low' | 'medium' | 'high';
+
+export const QUALITY_LEVELS: QualityLevel[] = ['low', 'medium', 'high', 'ultra', 'extreme', 'rtx'];
+export const SHADOW_QUALITY_LEVELS: ShadowQualityLevel[] = ['off', 'low', 'medium', 'high'];
+export const LIGHTING_QUALITY_LEVELS: LightingQualityLevel[] = ['low', 'medium', 'high'];
+export const REFLECTION_QUALITY_LEVELS: ReflectionQualityLevel[] = ['off', 'low', 'medium', 'high'];
+
+export const BASE_FOG_DENSITY = 0.016;
+export const MAX_BRIGHTNESS = 1.6;
+
 export const DEFAULT_SETTINGS = {
   graphics: {
-    quality: 'high',
+    quality: 'high' as QualityLevel,
     resolutionScale: 1,
     shadows: true,
+    shadowQuality: 'high' as ShadowQualityLevel,
+    lightingQuality: 'high' as LightingQualityLevel,
+    reflectionQuality: 'low' as ReflectionQualityLevel,
+    postProcessing: true,
+    bloom: true,
+    ambientOcclusion: false,
+    volumetrics: true,
     viewDistance: 1,
     effects: true,
     fog: true,
+    fogDensity: 1,
     antialias: true,
-    brightness: 1,
+    brightness: 1.12,
   },
   audio: {
     master: 0.9,
@@ -76,6 +97,8 @@ export const DEFAULT_SETTINGS = {
     screenShake: true,
     flashEffects: true,
     fov: DEFAULT_FOV,
+    hints: true,
+    coordinates: false,
   },
 } as const;
 
@@ -94,8 +117,11 @@ export const OBJECTIVE_TEXT = {
   leaveIntake: 'Exit the intake chamber when the lockdown lifts.',
   restoreResearchPower: 'Restore power to the Research Wing from Maintenance.',
   accessResearch: 'Use the Research Wing terminal to learn what happened.',
+  reachLevel2: 'Use the Level 2 card to enter the Observation Deck.',
+  recoverFootage: 'Recover the chamber footage from the Observation Deck.',
   unlockUnderground: 'Find the archive access code and enter the Underground.',
   findCoreKey: 'Search the Underground for the Suppression Core keycard.',
   reachCore: 'Reach the Suppression Core and restore the containment lattice.',
+  enterLevel3: 'Descend to Level 3 and inspect the containment storage.',
   escape: 'Choose the fate of the core and escape the facility.',
 } as const;
