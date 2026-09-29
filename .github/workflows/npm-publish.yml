@@ -31,7 +31,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Test multiplayer relay
         run: npm test
@@ -40,6 +40,9 @@ jobs:
         env:
           VITE_MULTIPLAYER_WS_URL: ${{ vars.MULTIPLAYER_WS_URL }}
         run: npm run build
+
+      - name: Add custom domain
+        run: echo "lost.skyhost.fun" > dist/CNAME
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v5
